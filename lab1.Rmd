@@ -1,0 +1,62 @@
+---
+title: "lab1"
+author: "204814891_204169320"
+date: "14 4 2020"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+library('maps')
+library('ggplot2')
+library('mapproj')
+library('nycflights13')
+library('readr')
+```
+
+
+Q2
+seif b
+```{r message=FALSE, warning=FALSE}
+USA <- subset(map_data("world"), region=="USA")
+#USA <- subset(USA, lat < 50) remove alaska
+states <- read_csv("states.csv") # state name with location
+```
+
+
+
+```{r}
+# plot usa with state borders and names
+ggplot() +
+  geom_polygon(data = USA, aes(x=long, y = lat, group = group), fill="white", alpha=0.3) +
+  borders("state") +
+  geom_text(aes(x=longitude,y=latitude, label=state), data=states, size = 2) +
+  #geom_segment()
+  theme_void() + 
+    # consider limit indices or remove from data alaska, hawaii and puerto rico
+    xlim(-130,-70) + 
+    ylim(25,50) +
+    coord_map()
+```
+
+
+```{r}
+# > 15 min. delay
+delays <- subset(flights, dep_delay > 15)
+del_dest_count <- table(delays$dest)
+dest_overall <- table(flights$dest)
+# there are 3 airports withot delays
+dest_overall <- dest_overall[names(table(flights$dest)) %in% names(table(delays$dest))]
+# compute percentages
+perc_delays <- as.data.frame(del_dest_count / dest_overall, row.names = TRUE)
+# add perc. bins according to the example
+perc_delays$bin = cut(perc_delays$Freq, 
+                  c(0,0.1,0.15,0.20,0.25,1), right = FALSE, 
+                  labels=c("<= 10%",
+                           "10% - 15%",
+                           "15% - 20%",
+                           "15% - 25%",
+                           "> 25%"))
+```
+
