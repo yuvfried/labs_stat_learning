@@ -13,9 +13,49 @@ library('ggplot2')
 library('mapproj')
 library('nycflights13')
 library('readr')
+library('dplyr')
 ```
 
 
+We loaded a  bunch of libararys that will help us later.
+this includes then nycflights13 library that has the following data frames that we will use:
+- flights 
+- airlines 
+- airports 
+- planes 
+- weather
+
+
+Q1 
+
+After we did some exloration (by ourselfes) of the data, let's answer Q 1:
+
+1.1)
+Delayed flights fig:
+   This graphic is telling a clear story, it is telling us the percent of flights that are delayed by more then 15 minutes, from Denver Colorado to other destinatinos in the US. 
+   
+Weekly Cycles fig:
+
+Q2
+seif a:
+- first thing we need is the number of flights, and number of delade flights each day
+
+```{r}
+flights$date <- format(flights$time_hour, '%D')
+clean_flights <- na.omit(flights)
+clean_flights$delayed <- ifelse(clean_flights$dep_delay > 15, 1, 0)
+flights_per_day <- as.data.frame(table(factor(clean_flights$date)))
+colnames(flights_per_day) <- c("date", "flights")
+delayes_per_day <- clean_flights %>% group_by(date) %>% summarise(Tot.delayed = sum(delayed))
+colnames(delayes_per_day) <- c("date", "delayes")
+data4graph <- merge(flights_per_day, delayes_per_day)
+data4graph$date <- as.Date(data4graph$date, "%m/%d/%Y")
+```
+After setting up all the data in the way we want it, all we need to do is plot!
+
+```{r}
+ggplot(data4graph) + geom_line(aes(x=date,y= flights, color = 'All flights (schedualed for separtue)')) + geom_bar(stat = "identity", aes(x = date, y = delayes, color = 'Late flights (departure delayed > 15 minutes)')) + theme(legend.position = "bottom") + scale_color_manual(name = "Colors", values = c('All flights (schedualed for separtue)' = "blue", 'Late flights (departure delayed > 15 minutes)' = "red")) + labs(title = "Weekly Cycles: Flights from NYC airports in 2013 \n  Few flights: Sundays & Saturdays \n Most Flights: Mondays, thursdays & fridays", y = "Flights per day") + theme(plot.title = element_text(hjust = 0.5))
+```
 Q2
 seif b
 ```{r message=FALSE, warning=FALSE}
