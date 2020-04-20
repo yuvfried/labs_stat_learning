@@ -150,7 +150,33 @@ plot +
     coord_map()
 ```
 
+
+Q 3:
+
+Lets see if we can find delay trends by the time of year. 
+first we will check if we can see a seasonal trend of the of the average dealy, as a function of the week in the year (weeks going from 1- 52)
+
 ```{r}
-#this is another change for git tests
+flights$date <-  as.POSIXct(flights$time_hour, "%m-%d-%Y")
+flights$week <- lubridate::isoweek(flights$date)
+# for this analysis we dont want negative delays, so we will zero them
+flights$dep_delay[flights$dep_delay < 0] = 0
+# now we have the week 
+weekly_avg_dealy <- flights %>%
+  select(month, day, week, dep_delay, carrier) %>%
+  group_by(month) %>%
+  summarise(average_delay <- mean(dep_delay, na.rm = 1) , sd(dep_delay, na.rm = 1)) %>%
+  ungroup()
+colnames(weekly_avg_dealy) <- c("month", "average_delay", "sd")
+# now lets see some ploting:
+ggplot(weekly_avg_dealy, aes(x = month, y = average_delay)) + 
+  geom_point(color = "red") + #geom_errorbar(aes(ymin = average_delay-sd, ymax = average_delay+sd), color = "red", width = .1) +
+  geom_smooth(color = "blue") + 
+  ylim(0,30) + scale_x_continuous(breaks = c(1:12), labels = c("Jan","Feb","Mar","Apr", "May","Jun","Jul","Aug","Sep","Oct","Nov","Dec")) +
+  geom_hline(aes(yintercept=0)) +
+  labs(title = "Average delay of flights by month", x = "month", y = "average delay") + 
+  theme(plot.title = element_text(hjust = 0.5))
 ```
+
+
 
