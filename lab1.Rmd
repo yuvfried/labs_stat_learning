@@ -97,7 +97,7 @@ perc_delays$bin = cut(perc_delays$Freq,
 perc_delays[,c('lon_source','lat_source')] <- subset(airports, faa=='JFK', select = c('lon','lat'))
 
 ```
-during getting target coordinates, we discovered 4 airports which doesn't have coordinated in the airports dataframe:
+during getting target coordinates, we discovered 4 airports which don't have coordinated in the airports dataframe:
 ```{r}
 rownames(perc_delays)[!(rownames(perc_delays) %in% airports$faa)]
 ```
@@ -137,8 +137,9 @@ scale_colour_manual(values=c("forestgreen", "purple", "blue","orange","red"))
 
 ```{r warning=FALSE}
 plot +
-  ggtitle("% of Flights Departures Delayed > 15 Min", subtitle = "airport=NY airports  Year=2013") +
-theme(legend.title = element_blank(), legend.position = c(0.22,0.1), panel.background = element_blank(), axis.line = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), axis.text = element_blank(), legend.key = element_rect(fill = "transparent", colour = "transparent"), legend.key.height = unit(0.7,"line"), plot.title = element_text(hjust = 0.5, size=12), plot.subtitle = element_text(hjust = 0.5, size=7)) +
+  ggtitle("% of Flights Departures Delayed > 15 Min", subtitle = "airport=NY's airports    Year=2013") +
+
+  theme(legend.title = element_blank(), legend.position = c(0.22,0.1), panel.background = element_blank(), axis.line = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), axis.text = element_blank(),legend.text = element_text(size=7), legend.key = element_rect(fill = "transparent", colour = "transparent"), legend.key.height = unit(0.7,"line"), plot.title = element_text(hjust = 0.5, size=10, face="bold"), plot.subtitle = element_text(hjust = 0.5, size=6, face="bold")) +
 
     xlim(-130,-70) + 
     ylim(25,50) +
