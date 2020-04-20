@@ -7,7 +7,11 @@ output: html_document
 
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
 library('maps')
 library('ggplot2')
 library('mapproj')
@@ -145,3 +149,8 @@ plot +
     ylim(25,50) +
     coord_map()
 ```
+
+```{r}
+#this is another change for git tests
+```
+
