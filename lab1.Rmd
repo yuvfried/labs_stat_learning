@@ -39,6 +39,29 @@ Delayed flights fig:
    This graphic is telling a clear story, it is telling us the percent of flights that are delayed by more then 15 minutes, from Denver Colorado to other destinatinos in the US. 
    
 Weekly Cycles fig:
+  In this graph we have the numnber of lfihgts per day (from an unclear destination) and number of delayed flights per day in 2008. This shows us patterns of number of flights and delayed flight as a function of time. The nive thing is that it showes us patterns in regard to days of the week, time of the year and other unexpected events. 
+  
+  1.2)
+Delayed flights fig:
+  The story of this graph is conveyed, but it is a rather noisy story. although is easy to see that many flight are delayed, its not at all intuitive to understand the genreal pattern of flight delayes, in that sense the story is not convayed!
+
+Weekly Cycles fig:
+  We would say that this figure is very succeful in telling the story it like to! we see very well the weekly and yearly cycled of both flights and delayes!
+  
+  1.3)
+Delayed flights fig:
+  Looking at this graph we can see wekk that some destinations have high delay tendencies, however it is unclear to understatn the patterns of wich destinations tend to have delayes. It looks like we may have a slight corelation between the distance and delayes (fligths to ferther destinations may be abit later) but that surley is not anough to explain it since many far distances have low dealy rates. 
+  Weekly Cycles fig:
+Here too we have some new quastions that raise. First we don't know what flights are included in the data that made the graph!
+Furthermore we see nice patterns in the number of flights, but the number of delayed flights seems like it might be more random, and is only loosly correlated to the number of flights, this begs the quastion of what is this correlated to (perhaps time of year).
+
+1.4)
+  Delays fligths fig:
+Better choice collors would have been better, as in if all the delaye levels would be later-darker shades of the same collor it could be easier to understand the patterns and it would be easier to understand how high the delay tendancies are. Also we would make the thicknes of the line preportinet to either the  popularity of rute or of the destination, this would add important info!
+  Weekly Cycled fig:
+We would add multi year average info to the graph, this would give us refrence to see how many of the patternd we see are yearly cycles and how mane are a facotr of unexpected events of the time. Also we would make it clearer what data is being graphed (a perticular airport, nation wide etc).
+
+--- 
 
 Q2
 seif a:
