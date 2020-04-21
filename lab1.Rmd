@@ -150,36 +150,15 @@ plot +
     coord_map()
 ```
 
+Q3
+We want to examine how departures delays depend on the flight's day of week and the daytime (the latter could be examine dependenty and independenty with the former).
+Firstly, we'll subset the relevant data.In addition, we'll create a daytime bins in order to make the plot more interpretable.
 ```{r}
-df <- 
-var_to_group <- 
-threshold <- 
-is_delay <- ifelse(df$arr_delay>threshold,1,0)
-# groupby
-value_count <- as.data.frame(group_by(df,var_to_group) %>% summarise(is_delay = sum(is_delay, na.rm = TRUE)))
-# total computation
-  total <- data.frame(table(df$var_to_group))
-  names(total) <- c(var_to_group, 'total')
-  comp_df <- left_join(value_count,total, by=var_to_group)
-  comp_df$perc <- comp_df[var_to_group]/comp_df$total
-  return(comp_df$perc)
-}
+data <- select(flights,year,month,day,hour,dep_delay,time_hour)
+data$daytime <- cut(data$hour, c(0,4,11,18,23),labels=c("evening (18h-01h)","morning (05h-11h)","afternoon (11h-18h)","evening (18h-01h)"),right = TRUE)
 ```
 
-```{r}
-flights_planes <- left_join(flights,planes,"tailnum")
-lin_reg <- lm(dep_delay~carrier+origin+distance+type+manufacturer+model+engines, data = flights_planes)
-#summary(lin_reg)
-```
-
-```{r}
-df <- as.data.frame(group_by(flights,carrier) %>% summarise(dep_delay = mean(dep_delay, na.rm = TRUE)))
-names(df) <- c("carrier","dep_delay")
-head(df)
-#ggplot(data=df) +
- # geom_bar(aes(x=carrier,y=dep_delay),stat = "identity")
-```
-
+the data doesn't include dat of week column, we can use the built-in weekdays functions, but we have to convert the date format beforhand.
 ```{r}
 # function to convert date data to one string with dash sep
 date_as_str <- function(year,month,day){
@@ -194,45 +173,45 @@ date_as_str <- function(year,month,day){
     return(paste(year,month,day,sep='-'))
 }
 
-
 ```
 
-```{r}
+Now, we can create the new desired column
+```{r message=FALSE}
+Sys.setlocale(category = "LC_ALL", locale = "English_United States.1252")
 data$day_of_week <- weekdays(as.Date(date_as_str(data$year,data$month,data$day)))
 data$day_num_of_week <- sapply(data$day_of_week,switch,"Sunday"=1,"Monday"=2,"Tuesday"=3, "Wednesday"=4,"Thursday"=5,"Friday"=6,"Saturday"=7)
 ```
 
+We'll create a df summarises the average delays.
 ```{r}
-stam1 <- data %>%
+week_sum <- data %>%
   group_by(day_num_of_week) %>%
-  summarise(average_delay = mean(dep_delay, na.rm = 1) ,std = sd(dep_delay, na.rm = 1))
-#stam1$std <- stam1$std/sqrt(table(data$day_num_of_week))
-
-ggplot(data=stam1, aes(x=day_num_of_week,y=average_delay)) +
-  geom_point(aes(x=day_num_of_week,y=average_delay)) +
-  geom_errorbar(aes(ymin=average_delay-std,ymax=average_delay+std), width = 0.1) +
-  scale_x_continuous(breaks = c(1:7))
-  
+  summarise(average_delay = mean(dep_delay, na.rm = 1))
 ```
 
+Now, we'll create a summary for average delay per hour for each day of the week.
 ```{r}
-stam <- data %>%
-  group_by(day_num_of_week, hour) %>%
-  summarise(average_delay = mean(dep_delay, na.rm = 1) ,std = sd(dep_delay, na.rm = 1))
-stam$daytime <- cut(stam$hour, c(0,4,11,18,23),labels=c("evening (18h-01h)","morning (05h-11h)","afternoon (11h-18h)","evening (18h-01h)"),right = TRUE)
+hour_week_sum <- data %>%
+  group_by(day_num_of_week, daytime) %>%
+  summarise(average_delay = mean(dep_delay, na.rm = 1))
+```
 
 
-ggplot(data=stam) +
-  ggtitle("Departures Delays per Day of Week") +
+```{r}
+ggplot(data=hour_week_sum) +
+  ggtitle("Departures Delays per Day of Week", subtitle = "Dots Represents the Avg Delay per Daytime in a Day") +
   labs(x="Day", y="Avg Delay (minutes)") +
+  
   # per daytime
   geom_point(aes(x=day_num_of_week,y=average_delay,colour=daytime), show.legend = TRUE) +
+  
   # daily
-  geom_point(data = stam1,aes(x=day_num_of_week,y=average_delay, fill="daily avg"), size=2.5) +
+  geom_point(data = week_sum,aes(x=day_num_of_week,y=average_delay, fill="daily avg"), size=2.5) +
   labs(fill="") +
-  geom_line(data = stam1,aes(x=day_num_of_week,y=average_delay)) +
-  geom_text(data=stam1, aes(x=day_num_of_week,y=average_delay+2, label=round(average_delay,digits = 2)),fontface='bold',size=4) +
+  geom_line(data = week_sum,aes(x=day_num_of_week,y=average_delay)) +
+  geom_text(data=week_sum, aes(x=day_num_of_week,y=average_delay+2, label=round(average_delay,digits = 2)),fontface='bold',size=4) +
     
   scale_x_continuous(breaks = c(1:7), labels = c("Sun","Mon","Tues","Wed","Thu","Fri","Sat"))
 ```
 
+As for the days, it looks like the Saturday is more likely to has a minor delay while Monday and Thursday are more likely to have some more major delays. The interesting thing is that could be seen nicely from the plot, is that no matter what day it is, you should prefer choose a morning flight and not an evening or an afternoon flight in terms of departure delays.
