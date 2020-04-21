@@ -18,6 +18,7 @@ library('mapproj')
 library('nycflights13')
 library('readr')
 library('dplyr')
+library("nullabor")
 ```
 
 
@@ -176,32 +177,65 @@ plot +
 ```
 
 
-Q 3:
-
-Lets see if we can find delay trends by the time of year. 
-first we will check if we can see a seasonal trend of the of the average dealy, as a function of the week in the year (weeks going from 1- 52)
+Q 4:
+To have our graphical lineup, first we need to produce the grpah on the real data!
+se we'll add (again) a binary colomn that gets a 1 when a fligth departure delay is longer then 15 mins and a 0 otherwise. 
+then we'll see what rate of flights were delayed per month. 
 
 ```{r}
 flights$date <-  as.POSIXct(flights$time_hour, "%m-%d-%Y")
-flights$week <- lubridate::isoweek(flights$date)
-# for this analysis we dont want negative delays, so we will zero them
-flights$dep_delay[flights$dep_delay < 0] = 0
-# now we have the week 
-weekly_avg_dealy <- flights %>%
-  select(month, day, week, dep_delay, carrier) %>%
+flights$is_delayed <- ifelse(flights$dep_delay > 15, 1, 0)
+monthly_avg_delay <- flights %>%
+  select(month, is_delayed) %>%
   group_by(month) %>%
-  summarise(average_delay <- mean(dep_delay, na.rm = 1) , sd(dep_delay, na.rm = 1)) %>%
+  summarise(average_delay <- mean(is_delayed, na.rm = 1) , sd(is_delayed, na.rm = 1)) %>%
   ungroup()
-colnames(weekly_avg_dealy) <- c("month", "average_delay", "sd")
-# now lets see some ploting:
-ggplot(weekly_avg_dealy, aes(x = month, y = average_delay)) + 
-  geom_point(color = "red") + #geom_errorbar(aes(ymin = average_delay-sd, ymax = average_delay+sd), color = "red", width = .1) +
-  geom_smooth(color = "blue") + 
-  ylim(0,30) + scale_x_continuous(breaks = c(1:12), labels = c("Jan","Feb","Mar","Apr", "May","Jun","Jul","Aug","Sep","Oct","Nov","Dec")) +
-  geom_hline(aes(yintercept=0)) +
-  labs(title = "Average delay of flights by month", x = "month", y = "average delay") + 
-  theme(plot.title = element_text(hjust = 0.5))
+colnames(monthly_avg_delay) <- c("month", "delay_rate", "std")
 ```
 
+Now we have our data, all we need to do is graph it:
 
+```{r}
+ggplot(monthly_avg_delay, aes(x = month, y = delay_rate)) + 
+  geom_point(color = "red") + 
+  geom_line(color = "blue") + 
+  ylim(0,.5) + scale_x_continuous(breaks = c(1:12), labels = c("Jan","Feb","Mar","Apr", "May","Jun","Jul","Aug","Sep","Oct","Nov","Dec")) +
+  labs(title = "Delay rate of flights by month", x = "month", y = "% of delayed flights") + 
+  theme(plot.title = element_text(hjust = 0.5))
 
+```
+Now we have our real data, let's simulate graphs based on the null hypothesis.
+Our null hypothesis is that the average flight delay may change per month, but varies randomly across the year.
+We decided to test this null hypothesis by simulating the delay rate.
+We decided to examine 2 distrebutions for this. First we tried the Normal distrebution with the mean = the mean delay rate and STD = the STD of the monthly averages, we did this thinking that this will give us rates in the same order of magnitude of the real rates, but not bounded by our actual resalts, the disedvantige is the the simulated rates are not at all bounded at, so theoritcaly we can get "rates" higher than 1 or lower than 0.
+Then we checked simulated results using the unform distrebutoin between the max and min real rates, the advantege here is that we know that all the simulated rates willl be pluasible, however this restricts the rates we can get and therfore eleminates some thoritcally possible (and even plausible) values.
+
+```{r message=FALSE, warning=FALSE}
+avg <- mean(flights$is_delayed, na.rm = TRUE)
+std <- sd(monthly_avg_delay$delay_rate ,na.rm = TRUE)
+set.seed(770)
+ggplot(lineup(null_dist('delay_rate',dist = "norm",list(avg,std)),monthly_avg_delay), aes(factor(month))) +
+  geom_line(aes(x=month,y=delay_rate), stat = 'identity', color = 'blue') +
+  geom_point(aes(x=month,y=delay_rate), color = 'red') +
+  ylim(0,.5) + scale_x_continuous(breaks = c(1:12), labels = c(1:12)) +
+  labs(title = 'Norm Line-up Simulated Delay Rates', x = 'month', y = '% of dealyed flights') + 
+  theme(plot.title = element_text(hjust = 0.5)) +
+  facet_wrap(~ .sample)
+```
+The second one will be from a uniform dist with params: (minimum delay perc. of month, minimum delay perc. of month)
+```{r message=FALSE, warning=FALSE}
+min_rate <- min(monthly_avg_delay$delay_rate)
+max_rate <- max(monthly_avg_delay$delay_rate)
+set.seed(770)
+ggplot(lineup(null_dist('delay_rate',dist = "unif",list(min_rate,max_rate)),monthly_avg_delay), aes(factor(month))) +
+  geom_line(aes(x=month,y=delay_rate), stat = 'identity', color = 'blue') +
+  geom_point(aes(x=month,y=delay_rate), color = 'red') +
+  ylim(0,.5) + scale_x_continuous(breaks = c(1:12), labels = c(1:12)) +
+  labs(title = 'Uniform Line-up Simulated Delay Rates', x = 'month', y = '% of dealyed flights') + 
+  theme(plot.title = element_text(hjust = 0.5)) +
+  facet_wrap(~ .sample)
+```
+Looking at both linups it is deffinatly hard to point at a single graph and decide that that is the one made from the real data. However with a clos einspection we can see that most graphs are very "bumpy" while a few are smoother. This Makes suspect that one of the smoother graphs may be the "real one" sinse it shows corelation between different months (as apose to the null hypothesis).
+The problem is that in both linups, we have other graphs, besides the original, that are quite smooth, to an axtent that makes it hard to decide for sure witch one is real. 
+We happen to know that the "real"graph is #10, howevewr in the normal linup #16 & #12 also stand out, so it would deffinatly be hard to pick the right one. similarly in the uniform line up #19 also stand out, as well as some other options. 
+All in all in seems that it would be very hard to pass this line-up and therfore we shouldn't reject the null hypothesis.
