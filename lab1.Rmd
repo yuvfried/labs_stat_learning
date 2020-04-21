@@ -66,25 +66,34 @@ We would add multi year average info to the graph, this would give us refrence t
 Q2
 seif a:
 - first thing we need is the number of flights, and number of delade flights each day
+and do some data proccesig to have the data rady for graphing.
 
 ```{r}
 flights$date <- format(flights$time_hour, '%D')
+# now we have some rows with missing data  witch will makes things ahrd for us, so we will remove all rows that contain NA values (for this grpah only) 
 clean_flights <- na.omit(flights)
-clean_flights$delayed <- ifelse(clean_flights$dep_delay > 15, 1, 0)
-flights_per_day <- as.data.frame(table(factor(clean_flights$date)))
+clean_flights$delayed <- ifelse(clean_flights$dep_delay > 15, 1, 0) # adding a binary delay value
+# now we'll make a new data frame with number of fligths per day and another one for number of delayed per day
+flights_per_day <- as.data.frame(table(factor(clean_flights$date))) 
 colnames(flights_per_day) <- c("date", "flights")
 delayes_per_day <- clean_flights %>% group_by(date) %>% summarise(Tot.delayed = sum(delayed))
 colnames(delayes_per_day) <- c("date", "delayes")
-data4graph <- merge(flights_per_day, delayes_per_day)
-data4graph$date <- as.Date(data4graph$date, "%m/%d/%Y")
+data4graph <- merge(flights_per_day, delayes_per_day) #conecting both values to a single data frame
+data4graph$date <- as.Date(data4graph$date, "%m/%d/%Y") # change the date to a date format
 ```
 After setting up all the data in the way we want it, all we need to do is plot!
 
 ```{r}
-ggplot(data4graph) + geom_line(aes(x=date,y= flights, color = 'All flights (schedualed for separtue)')) + geom_bar(stat = "identity", aes(x = date, y = delayes, color = 'Late flights (departure delayed > 15 minutes)')) + theme(legend.position = "bottom") + scale_color_manual(name = "Colors", values = c('All flights (schedualed for separtue)' = "blue", 'Late flights (departure delayed > 15 minutes)' = "red")) + labs(title = "Weekly Cycles: Flights from NYC airports in 2013 \n  Few flights: Sundays & Saturdays \n Most Flights: Mondays, thursdays & fridays", y = "Flights per day") + theme(plot.title = element_text(hjust = 0.5))
+ggplot(data4graph) + geom_line(aes(x=date,y= flights, color = 'All flights (schedualed for separtue)')) + 
+  geom_bar(stat = "identity", aes(x = date, y = delayes, color = 'Late flights (departure delayed > 15 minutes)')) + 
+  theme(legend.position = "bottom") + scale_color_manual(name = "Colors", values = c('All flights (schedualed for separtue)' = "blue", 'Late flights (departure delayed > 15 minutes)' = "red")) + 
+  labs(title = "Weekly Cycles: Flights from NYC airports in 2013 \n  Few flights: Sundays & Saturdays \n Most Flights: Mondays, thursdays & fridays", y = "Flights per day") + 
+  theme(plot.title = element_text(hjust = 0.5))
 ```
-Q2
+
 seif b
+first we will make a table that include the subset of delayed flights alone and group this by destinations to get a cout of delayed flights by destinations.
+simelarly, for refrence we will group the flights data by destinations to get a count of flights per destination. 
 ```{r}
 # > 15 min. delay
 delays <- subset(flights, dep_delay > 15)
@@ -96,11 +105,11 @@ We can see that we have 3 airports withot delays at all:
 ```{r}
 dest_overall[!(names(table(flights$dest)) %in% names(table(delays$dest)))]
 ```
-So we'll ignore them and then assign them manually 0%
+So we'll ignore them and then assign them manually 0% (so we dint have deviding by 0 problems and such)
 ```{r}
 no_del <- rownames(dest_overall[!(names(table(flights$dest)) %in% names(table(delays$dest)))])
 dest_overall <- dest_overall[names(table(flights$dest)) %in% names(table(delays$dest))]
-# compute percentages
+# compute percentages of dealyed for each dest
 perc_delays <- as.data.frame(del_dest_count / dest_overall, row.names = TRUE)
 
 # append and assign
@@ -109,9 +118,8 @@ colnames(to_append) <- 'Freq'
 rownames(to_append) <- no_del
 perc_delays <- rbind(perc_delays,to_append)
 ```
-
+Now we hve the percentages, we will split the data in to bind by the delay time
 ```{r}
-# add perc. bins according to the example
 perc_delays$bin = cut(perc_delays$Freq, 
                   c(0,0.1,0.15,0.20,0.25,1), right = FALSE, 
                   labels=c("<= 10%",
@@ -119,16 +127,14 @@ perc_delays$bin = cut(perc_delays$Freq,
                            "15% - 20%",
                            "15% - 25%",
                            "> 25%"))
-
-#define JFK as the source (all 3 are pretty close in output graph)
+#for simplicity we'll define JFK as the source (all 3 are pretty close in output graph)
 perc_delays[,c('lon_source','lat_source')] <- subset(airports, faa=='JFK', select = c('lon','lat'))
-
 ```
 during getting target coordinates, we discovered 4 airports which don't have coordinated in the airports dataframe:
 ```{r}
 rownames(perc_delays)[!(rownames(perc_delays) %in% airports$faa)]
 ```
-After Googling it we found they all located in Puerto Riko, so we could omit them relying on the assumption that the relevant data is located only in the main land of the U.S.A (same as Denver's plot in Moodle).
+All 4 of these airports are in puerto rico, so we will consider these as outliers and remove them (as done in the original graph)
 
 ```{r}
 perc_delays <- perc_delays[rownames(perc_delays) %in% airports$faa,]
@@ -137,15 +143,14 @@ Now, it's possible to get the target coordinates
 ```{r}
 perc_delays[,c('lon_target','lat_target')] <- airports[airports$faa %in% rownames(perc_delays),c('lon','lat')]
 ```
-
-plot
+So wev'e done all the data procesing, now we jsut need to do the graphing.
+first we need to get the USA with states to plot the rutes, for this we have a map in R, to add the state names we found a csv file with all the states name, acronyme and coodinates.
 ```{r message=FALSE, warning=FALSE}
 USA <- subset(map_data("world"), region=="USA")
-#USA <- subset(USA, lat < 50) remove alaska
 states <- read_csv("states.csv") # state name with location
 ```
 
-
+now we can add the data to the map we have
 
 ```{r}
 plot <- 
@@ -157,17 +162,14 @@ plot <-
 # plot filghts according to delays
 geom_segment(data = perc_delays, aes(x=lon_source,y=lat_source, xend=lon_target, yend=lat_target, colour=bin)) +
 geom_point(data=perc_delays,aes(x=lon_target,y=lat_target, colour=bin),shape=21,size=1.5, show.legend = FALSE) +
-
 scale_fill_manual(values=rep("white",5)) + 
 scale_colour_manual(values=c("forestgreen", "purple", "blue","orange","red"))
 ```
-
+We have out map now, but is scaled horibly so we need to fix that by setting limits and add some finishing touches .
 ```{r warning=FALSE}
 plot +
   ggtitle("% of Flights Departures Delayed > 15 Min", subtitle = "airport=NY's airports    Year=2013") +
-
   theme(legend.title = element_blank(), legend.position = c(0.22,0.1), panel.background = element_blank(), axis.line = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), axis.text = element_blank(),legend.text = element_text(size=7), legend.key = element_rect(fill = "transparent", colour = "transparent"), legend.key.height = unit(0.7,"line"), plot.title = element_text(hjust = 0.5, size=10, face="bold"), plot.subtitle = element_text(hjust = 0.5, size=6, face="bold")) +
-
     xlim(-130,-70) + 
     ylim(25,50) +
     coord_map()
