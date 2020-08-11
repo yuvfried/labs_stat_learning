@@ -1,0 +1,56 @@
+---
+title: "Q1"
+output:
+  html_document:
+    df_print: paged
+---
+
+
+```{r message=FALSE}
+library(dplyr)
+library(ggplot2)
+```
+
+
+```{r}
+raw_data <- read.csv("pisa_israel_2018_fortargil.csv")
+data <- raw_data
+```
+
+The next report discusses the interplay between two predictors - PAREDINT and System - and the target variable PVREAD.
+PAREDINT is an index that assign a number of parent's educational years for each student. This index correlated positively with the reading grade.
+```{r}
+cors <- apply(
+  select_if(data, is.numeric), 2, 
+  function(x) cor(x, data$PVREAD, use = "complete.obs")
+    )
+# sort by correlation magnitude
+cors[order(abs(cors),decreasing = T)]
+```
+
+As it is an index, it should be treated as an ordinal discrete variable. Indeed, It doesn't have a lot of distinct values
+```{r}
+unique(data$PAREDINT)
+```
+```{r}
+data$PAREDINT <- as.factor(data$PAREDINT)
+```
+
+The System variable is a categorical one, which tells us the educational section to which the student belongs. We observe that the Arabic system achievements are worse than the others:
+```{r, fig.height=3}
+ggplot(data) +
+  geom_boxplot(aes(x=System,y=PVREAD, fill=System)) +
+  labs(title="Different Educational System Achievements", x="") +
+  theme(axis.text.x = element_blank(), axis.ticks = element_blank())
+```
+
+It could be interesting to examine the different achievements within the PAREDINT index, and to see if we can gather more information by the division to different educational sections.
+```{r fig.width=12}
+ggplot(data) +
+  geom_boxplot(aes(x=PAREDINT,y=PVREAD, fill=System)) +
+  labs(title="Reading Grade by Student's Parent Educational Index") +
+  theme(plot.title = element_text(size=22),legend.position = "bottom",
+        legend.title = element_text(size=12, face="bold"))
+```
+
+As we mentioned above, the Index is all in all positively correlated with the reading grade. Yet, as the Index group decreases, we notice that the gap between different systems increases. Especially, we could see that in lower Indexes the Ultra Orthodox girls achievements are signfically greater than the others, while its first quartile equals to the higher student's achievements from Hebrew systems. We can guess that people from the Ultra Orthodox community who doesn't have many years of formal education have a complementary education from other systems (Yeshiva, Seminar etc). In those systems, there may be a practice of reading and writing, in a manner that affects the education of that people's daughters and their achievements. Moreover, the Arabic System is notable by its worse achievements even among the higher Index groups. We can see that the grades of higher Indexes among the Arabic system are pretty lower even than the grades of other systems in lower Indexes.

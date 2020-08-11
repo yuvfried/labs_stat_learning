@@ -1,0 +1,375 @@
+---
+title: "Q2"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r message=FALSE}
+library(ggplot2)
+library(gridExtra)
+```
+
+
+```{r}
+raw_data <- read.csv("pisa_israel_2018_fortargil.csv")
+```
+
+
+### 2.a
+#### Imputation and Scaling
+First of all we will take a glance at the data, examine data types and their values and count the missing values at each variable.
+```{r}
+summary(raw_data)
+```
+
+We can see some of the variables don't have missing values at all, and all in all no variable has up to 20% of NA's. In addition, all variables are numeric except for 'System' and 'LANGN', when these two don't have NA's. This helps us simply impute the data by its variable's mean, and to create one-hot dummy variables for the two categoricals.
+However, the numeric variables have different scales: for example, JOYREAD is between -2.7 and 2.7 while STRATIO is between 1 and 100. We will account for it by scale all numeric variables to be between 0 and 1. After prediction, we might want to restore the PVREAD values into their original scale, therefore we need the opposite function for zero one scaling (one to one function for variable whose var>0).
+```{r}
+impute_mean <- function(data, cols_to_impute){
+  vals_to_impute <- colMeans(data[cols_to_impute],na.rm=TRUE)
+  for (col in cols_to_impute){
+    data[col][is.na(data[col])] <- vals_to_impute[col]
+  }
+  return(data)
+}
+
+convert_to_dummies <- function(data, cat_name){
+  one_hot <- model.matrix(~data[[cat_name]])[,-1]
+  n_minus_one <- length(colnames(one_hot))
+  colnames(one_hot) <- paste(rep(cat_name,n_minus_one),1:n_minus_one,sep="")
+  data <- data[ , -which(names(data) %in% c(cat_name))]
+  data <- cbind(one_hot, data)
+  return(data)
+}
+
+zero_one_scaling <- function(vec){
+  mini <- min(vec)
+  maxi <- max(vec)
+  return(sapply(vec, function(x) (x-mini)/(maxi-mini)))
+}
+
+opposite_zero_one_scaling <- function(scaled_vec,params){
+  mini <- params$min
+  maxi <- params$max
+  return(sapply(scaled_vec, function(x) x*(maxi-mini)+mini))
+}
+```
+
+Apply pre-processing
+```{r}
+# deep copy of df for pre-processing
+data <- data.frame(raw_data)
+
+cols_to_impute <- names(which(colSums(is.na(data))>0))
+data <- impute_mean(data,cols_to_impute)
+
+data$LANGN <- as.character(data$LANGN) # its integers are language codes and not numbers
+data <- convert_to_dummies(data,"LANGN")
+data <- convert_to_dummies(data,"System")
+
+
+PVREAD.params <- list(min=min(data$PVREAD), max=(max(data$PVREAD)))
+data <- as.data.frame(apply(data,MARGIN = 2, zero_one_scaling))
+
+# sanity checks
+any(is.na(data)) # expected FALSE
+all.equal(
+  data$PVREAD * (PVREAD.params$max - PVREAD.params$min) + PVREAD.params$min,
+  raw_data$PVREAD) # expected TRUE
+```
+
+#### Distance Functions
+The two distance functions follow identical principle: they compute the euclidean distance between two students, and divide it by the length of the corresponding variable type (student/class). In this way, distance of bigger variable type (such as student in our case) would not be biased to be larger than the smaller type.
+In my code I implement computaion of distance matrix, and not only between one point to another. This implementaion helped me make my CV implementaion faster. I was helped by this [stack overflow answer](https://stackoverflow.com/questions/57823228/how-to-use-apply-function-to-calculate-the-distance-between-two-matrices)
+```{r}
+# obs is matrix dim (num_obs,student/class_data)
+# returns dists between 1 or more observations and training observations
+student_dist <- function(data, student_colnames, obs){
+  obs_student <- obs[,student_colnames]
+  data_student <- data[,student_colnames]
+  p <- length(student_colnames)
+  dists <- apply(obs_student, 1, function(x) 
+    apply(data_student, 1, function(y) sqrt(crossprod(x-y))))
+  
+  return(dists/p)
+}
+
+class_dist <- function(data, class_colnames, obs){
+  obs_class <- obs[,class_colnames]
+  data_class <- data[,class_colnames]
+  p <- length(class_colnames)
+  dists <- apply(obs_class, 1, function(x) 
+    apply(data_class, 1, function(y) sqrt(crossprod(x-y))))
+  
+  return(dists/p)
+}
+```
+
+### 2.b
+
+Partition column names into Student and Class variables.
+```{r}
+explained_varnames <- read.csv("pisa_variables_fortargil.csv")
+VARS.NAMES.STUDENT <- as.character(explained_varnames$ID[2:10])
+VARS.NAMES.CLASS <- as.character(explained_varnames$ID[c(1,11:15)])
+
+dummies_System <- length(unique(raw_data$System))-1
+new_cols_System <- paste(rep("System",dummies_System),1:dummies_System,sep="")
+VARS.NAMES.CLASS <- VARS.NAMES.CLASS[!VARS.NAMES.CLASS=="System"]
+VARS.NAMES.CLASS <- c(new_cols_System,VARS.NAMES.CLASS)
+
+dummies_LANGN <- length(unique(raw_data$LANGN))-1
+new_cols_LANGN <- paste(rep("LANGN",dummies_LANGN),1:dummies_LANGN,sep="")
+VARS.NAMES.STUDENT <- VARS.NAMES.STUDENT[!VARS.NAMES.STUDENT=="LANGN"]
+VARS.NAMES.STUDENT <- c(new_cols_LANGN,VARS.NAMES.STUDENT)
+```
+
+Implementation of knn predition
+```{r}
+# test points are matrix/df whose rows are test points
+knn <- function(test_points, training_data, target_name,
+                student_colnames, class_colnames, k, alpha,
+                student_dist_func,class_dist_func){
+  
+  d_student <- student_dist_func(training_data,student_colnames,test_points)
+  d_class <- class_dist_func(training_data,class_colnames,test_points)
+  d_alpha <- alpha*d_student + (1-alpha)*d_class
+
+  # knn of one point according to its dists from training data points
+  get_k_near <- function(point.dists){
+    sorted <- sort(point.dists,index.return=T)
+    return(head(sorted$ix,k))
+  }
+  
+  # mean of target variable of k nearest neighbours 
+  k_near_mean <- function(k_near_idx){
+    return(mean(training_data[k_near_idx,target_name]))
+    }
+  
+  # apply to all test points
+  mat.k_near <- as.matrix(apply(d_alpha,2,get_k_near))
+  preds <- apply(mat.k_near,2,k_near_mean)
+  return(preds)
+}
+```
+
+### 2.c
+Two schemes of cross-validation for out-of-sample prediction.
+We will use train-test split of 75%.
+For the first scheme, we will sample uniformly the train and test points. As for the second one, we will divide the classes by the different values of the 'System' variable, so 3 classes will be the train points and the rest the test points. 
+```{r}
+# fucntion applies predicting on train-test partitioning
+cv_pred <- function(data, test_points, target_name, student_colnames, class_colnames, 
+                    k, alpha, student_dist_func, class_dist_func,return.preds=F){
+  test <- data[test_points, ]
+  preds <- knn(test_points = test,
+               training_data = data[-test_points, ],
+               target_name = target_name,
+               student_colnames = student_colnames, 
+               class_colnames = class_colnames, k = k, 
+               alpha = alpha, student_dist_func = student_dist_func, 
+               class_dist_func = class_dist_func)
+  
+  if (return.preds==T){
+    return(preds)
+  }
+
+  return(sqrt(sum((test[,target_name] - preds)^2,na.rm=T)/length(preds))) #RMSE
+}
+
+cv_knn <- function(training_data, perc_of_train, target_name,
+                student_colnames, class_colnames, k_near_num, alpha,
+                student_dist_func,class_dist_func,seed, return.preds=F){
+  n <- nrow(training_data)
+  idx <- 1:n
+  set.seed(seed)
+  train_points <- sample(idx,size = floor(n*(1-perc_of_train)))
+  rmse <- cv_pred(data,train_points,target_name=target_name, 
+    student_colnames=student_colnames, class_colnames=class_colnames,
+    k=k_near_num, alpha=alpha, student_dist_func=student_dist_func,
+    class_dist_func=class_dist_func, return.preds = return.preds)
+  
+  return(rmse)
+}
+
+cv_classes_knn <- function(classes_training_data, target_name,
+                student_colnames, class_colnames, k_near_num, alpha,
+                student_dist_func,class_dist_func, seed, return.preds=F){
+
+classes <- list(as.integer(row.names(classes_training_data[classes_training_data
+                                                [["System1"]]==1,])),
+                as.integer(row.names(classes_training_data[classes_training_data
+                                                [["System2"]]==1,])),
+                as.integer(row.names(classes_training_data[classes_training_data
+                                                [["System3"]]==1,])),
+                as.integer(row.names(subset(classes_training_data,subset =
+                         System1==0 & System2==0 & System3==0))))
+  
+  names(classes) <- as.character(1:4)
+  set.seed(seed)
+  test_class <- sample(names(classes),size = 1)
+
+  rmse <- cv_pred(data=classes_training_data, test_points = classes[[test_class]],
+                  target_name=target_name, student_colnames=student_colnames,
+                  class_colnames=class_colnames, k=k_near_num, alpha=alpha,
+                  student_dist_func=student_dist_func, class_dist_func=class_dist_func,
+                  return.preds = return.preds)
+
+  return(rmse)
+}
+```
+
+Create an Hyperparameters grid for tuning. Optimally, we may include various values of k for tuning, but this would be computationally too heavy for our flow of analysis.
+```{r}
+hyper_grid <- expand.grid(
+  k = as.integer(c(1,5,10,15,20,25)),
+  alpha = seq(0,1,by = 0.25),
+  # a place to dump results
+  unif_test_error = NA,
+  classes_test_error = NA
+)
+```
+
+```{r}
+seed=123
+start <- Sys.time()
+
+hyper_grid$unif_test_error <- apply(hyper_grid[,c("k","alpha")],1,
+                                    FUN = function(hypers) cv_knn(
+                                      training_data=data,
+                                      perc_of_train = 0.75,
+                                      target_name="PVREAD",
+                                      student_colnames=VARS.NAMES.STUDENT,
+                                      class_colnames=VARS.NAMES.CLASS,
+                                      k_near_num=hypers[["k"]],
+                                      alpha=hypers[["alpha"]],
+                                      student_dist_func=student_dist,
+                                      class_dist_func=class_dist,
+                                      seed=seed))
+
+hyper_grid$classes_test_error <- apply(hyper_grid[,c("k","alpha")],1,
+                                    FUN = function(hypers) cv_classes_knn(
+                                      classes_training_data = data,
+                                      target_name="PVREAD",
+                                      student_colnames=VARS.NAMES.STUDENT,
+                                      class_colnames=VARS.NAMES.CLASS,
+                                      k_near_num=hypers[["k"]],
+                                      alpha=hypers[["alpha"]],
+                                      student_dist_func=student_dist,
+                                      class_dist_func=class_dist,
+                                      seed=seed))
+
+end <- Sys.time()
+print(end-start)
+```
+
+```{r}
+# round results for convenience of plotting
+hyper_to_plot <- hyper_grid
+hyper_to_plot[,3:4] <- apply(hyper_to_plot[,3:4],2,function(x)round(x,3))
+```
+
+(Note about the plot: I chose geom_point instead of geom_raster/tile for heatmap since the latters work pretty only if diffrenece in axis value are equal, whilst in our k and alpha setup this is not the case)
+```{r, fig.height = 7, fig.width=7}
+p <- ggplot(hyper_to_plot) + 
+  ylim(-0.05,1.05) +
+  theme(plot.title = element_text(size=10)) +
+  scale_colour_gradient(low="navyblue",high="orange")
+
+p.unif <- p + 
+  geom_point(aes(x=k,y=alpha,color=unif_test_error), size=5) +
+  geom_text(aes(x=k,y=alpha, label=unif_test_error),
+            size=3, hjust=0.5, vjust=-1.5) + 
+  labs(title = "Uniformly Distributed Scheme", color="error")
+
+p.classes <- p + 
+  geom_point(aes(x=k,y=alpha,color=classes_test_error), size=5) + 
+  geom_text(aes(x=k,y=alpha, label=classes_test_error),
+            size=3,hjust=0.5, vjust=-1.5) + 
+  labs(title = "Classes Scheme", color="error")
+
+grid.arrange(p.unif,p.classes,nrow=2,
+             top="RMSE of Predictions in Both CV Schemes")
+```
+
+The very first thing that catches the eye is that k=1 performs extremly worse than any other setup in both schemes. Its high RMSE's prevent us to colorize differently other hyperparameters setup. For better examining differeces, we will plot the results again without k=1.
+```{r, fig.height = 7, fig.width=7}
+p <- ggplot(subset(hyper_to_plot, k!=1)) + 
+  ylim(-0.05,1.05) +
+  theme(plot.title = element_text(size=10)) +
+  scale_colour_gradient(low="navyblue",high="orange")
+
+p.unif <- p + 
+  geom_point(aes(x=k,y=alpha,color=unif_test_error), size=5) +
+  geom_text(aes(x=k,y=alpha, label=unif_test_error),
+            size=3, hjust=0.5, vjust=-1.5) + 
+  labs(title = "Uniformly Distributed Scheme", color="error")
+
+p.classes <- p + 
+  geom_point(aes(x=k,y=alpha,color=classes_test_error), size=5) + 
+  geom_text(aes(x=k,y=alpha, label=classes_test_error),
+            size=3,hjust=0.5, vjust=-1.5) + 
+  labs(title = "Classes Scheme", color="error")
+
+grid.arrange(p.unif,p.classes,nrow=2,
+             top="RMSE of Predictions in Both CV Schemes")
+```
+
+Generally we can observe that smaller k's performed worse, and that the optimal k fall in k=20. Even for each particular alpha, given its value we see almost consistency in the RMSE reduction as k increases, for both CV-schemes. It's interesting to see that in the Classes Scheme larger alpha's performed better. The reason is that when alpha increases the train and test points tend to come from more similar distributions, since the classes variables less affect the model. In the Uniform Scheme, the train and test points comes from a similar distributions by the defintion of the scheme, and indeeed the optimal alpha there falls in the middle.
+
+SD of target variable (scaled as it was in CV-estimation) and RMSE Comparision:
+
+```{r}
+sd(data$PVREAD)
+```
+
+The variance of the target variable reflects the MSE of a basic model in which all the predicted values are the sample mean of the target variable, as implicit by the Variance Decomposition (which is decomposed to explained and unexplained). Therfore, the SD of the target variable could be taken as a nice baseline for our model's RMSE.
+For k=1, all the hyperparameters setups in both scheme did really poor. For other k's, all of the setups in the Uniform Scheme - except those with k=1 -  improved the baseline. However, in the Classes Scheme only a few ones improved the baseline.
+
+### 2.d
+Extract best hyperparameters of each Scheme
+```{r}
+hyper_grid[apply(hyper_grid[,3:4],2,which.min),]
+```
+
+```{r}
+# extract relevant part from CV function to reproduce result
+set.seed(123)
+test_unif <- data[sample(1:nrow(data),size = floor(nrow(data)*(1-0.75))),]
+
+classes <- list(as.integer(row.names(data[data
+                                                [["System1"]]==1,])),
+                as.integer(row.names(data[data
+                                                [["System2"]]==1,])),
+                as.integer(row.names(data[data
+                                                [["System3"]]==1,])),
+                as.integer(row.names(subset(data,subset =
+                         System1==0 & System2==0 & System3==0))))
+
+names(classes) <- 1:4
+
+set.seed(123)
+test_class <- data[classes[[sample(names(classes),size = 1)]],]
+
+preds_unif <- knn(test_points = test_unif,training_data = data,"PVREAD",
+             VARS.NAMES.STUDENT,VARS.NAMES.CLASS,
+             20,0.5,student_dist,class_dist)
+
+preds_class <- knn(test_points = test_class,training_data = data,"PVREAD",
+             VARS.NAMES.STUDENT,VARS.NAMES.CLASS,
+             25,1,student_dist,class_dist)
+
+```
+
+```{r}
+e_unif <- test_unif$PVREAD - preds_unif
+e_class <- test_class$PVREAD - preds_class
+```
+
+Firstly, we havn't found any strong association between one of the predictors and the residuals. This, in some way, may indicates that the variables were scaled appropriately.
+Also, We have found quite strong connection between residuals and PVREAD itself:
+```{r echo=TRUE}
+plot(e_unif,opposite_zero_one_scaling(test_unif$PVREAD,PVREAD.params), xlab="residulas", ylab="PVREAD (restored)", main="Target and residulas connection in Uniform Scheme")
+```
+We can learn from this plot that the model overestimates "weak" students and underestimate "strong" ones. The reason is that knn is a kind of "smoother", and tends to move the extreme points to the center of the distribution. Thus, extremly weak student will be predicted to be more strong and vice versa, note that a lot of "middle" students were predicted pretty close to their real grade.

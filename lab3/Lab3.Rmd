@@ -1,0 +1,579 @@
+---
+title: "Lab_III"
+author: "204814891, 204169320"
+date: "6/10/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(reshape2)
+library(grid)
+library(gridExtra)
+library(dplyr)
+library(glmnet)
+library(Matrix)
+library(latex2exp)
+library(scales)
+library(reshape2)
+set.seed(770)
+```
+
+# Questoin 1
+
+1.1
+```{r}
+# must input either n or x and not both
+# x is a vector
+# lambda is a constant
+sample_data <- function(n=NA,x=NA,lambda,seed=123){
+  set.seed(seed)
+  if (is.na(n)){
+    n <- length(x)
+  }
+  else{
+    x <- runif(n,-2,2)
+  }
+  
+  eps <- rnorm(n,mean=0,sd=sqrt(0.3))
+  fx <- sin(lambda*x) + 0.3*(x^2) + ((x-0.5)/3)^3
+  yx <- fx + eps
+  return(data.frame(list(predictors=x,responses=yx)))
+}
+```
+
+1.2
+```{r}
+# train_x, train_y are of shape (num_of_training_examples, 1)
+# x is of shape (num_examples_to_smooth_on,1)
+# h is a scalar
+# returns list: y_hat is a vector with same shape of x; W is weights matrix of shape (num_of_training_examples,num_examples_to_smooth_on)
+
+gaussian_kernel_regr <- function(train_x,train_y,x,h){
+  # in the next two functions x is a scalar
+  
+  # apply kernel function to one example and find its weights
+  gaussian_kernel_weights <- function(x, train_x, h){
+  kernels <- dnorm(x=x,mean = train_x, sd=h)
+  w_hat <- kernels/sum(kernels)
+  return(w_hat)}
+  
+  # fit mu_hat to one example
+  gaussian_kernel_preds <- function(train_y, w_hat){
+  mu_hat <- sum(train_y*w_hat)
+  return(mu_hat)}
+  
+  # generalize to all smoothers
+  w_mat <- mapply(FUN=gaussian_kernel_weights, x, MoreArgs = list(train_x=train_x, h=h))
+  mu_vec <-  apply(w_mat,2,FUN=function(w)gaussian_kernel_preds(train_y,w))
+  return(list(y_hat=mu_vec,W=w_mat))
+}
+```
+
+
+1.3
+sample 4 experiments. We've chosen h values between 10^(-3) and 2. 
+```{r}
+exps <- list(
+  exp1 = list(n=50, lambda=1.5, data=sample_data(n=50,lambda=1.5)),
+  exp2 = list(n=50, lambda=5, data=sample_data(n=50,lambda=5)),
+  exp3 = list(n=200, lambda=1.5, data=sample_data(n=200,lambda=1.5)),
+  exp4 = list(n=200, lambda=5, data=sample_data(n=200,lambda=5))
+  )
+
+h_values <- c(0.001,0.5,1,2)
+```
+
+
+The next code block will help us in organizing our results.
+```{r}
+# empty constructor with determination of colnames
+create_empty_df <- function(rows,cols){
+  df <- data.frame(matrix(nrow=length(rows),ncol=length(cols)),row.names = rows)
+  colnames(df) <- cols
+  return(df)
+}
+
+# index will include what n and lambda were used
+combinations <- rep(NA,4)
+for (i in 1:4){
+  key.exp <- paste("exp",i,sep='')
+  ex <- exps[[key.exp]]
+  combinations[i] <- paste('n=',ex$n,'lambda=',ex$lambda,sep=',')
+}
+
+#initialization
+epes <- create_empty_df(combinations,h_values)
+eops <- create_empty_df(combinations,h_values)
+errins <- create_empty_df(combinations,h_values)
+errs_kfold <- create_empty_df(combinations,h_values)
+errs_new <- create_empty_df(combinations,h_values)
+```
+
+The next functions will be Helpers for computing the whole experiments's regressions.
+1.3.1 EPE
+```{r}
+epe <- function(y,y_hat){
+  return((sum(y-y_hat,na.rm=T)^2)/length(y))
+}
+```
+
+1.3.2 Eop
+Note about W and sigma^2:
+W is the weight matrix of our training example (and therfore indeed squared). In a Kernel Regression, we can think about the smoothing as weighting every response by the corresponding kernel distance between the observation and the predictor. In the Gaussian Kernel Regression, the kernel distance is the normal density.
+sigma^2 is 0.3 as given, this is the noise of the data. It's basically the variance of the responses (y).
+```{r}
+eop <- function(n,trW,sigma=sqrt(0.3)){
+  return(2*(sigma^2)*trW/n)
+}
+```
+
+1.3.3 ERRin
+```{r}
+errin <- function(train_x,lambda,h,num_of_samples=10){
+  errs <- rep(NA,num_of_samples)
+  for (i in 1:num_of_samples){
+    y_star <- sample_data(x=train_x,lambda=lambda)$responses
+    reg <- gaussian_kernel_regr(train_x=train_x,train_y=y_star,x=train_x,h=h)
+    y_hat <- reg$y_hat
+    errs[i] <- epe(y_star,y_hat)
+  }
+  return(sum(errs)/length(errs))
+}
+```
+
+1.3.4 kfold Cross-Validation for Kernel Regression
+```{r}
+kfold_kernel_regr <- function(data,k=5,h){
+  # random partitioning
+  x <- data$predictors
+  y <- data$responses
+  n <- nrow(data)
+  fold_size <- n/k # we should consider cases in which n/k isn't integer but we're given that it's indeed integer
+  idxs <- 1:n
+  errs <- rep(NA,k)
+  for (i in 1:k){
+    fold <- sample(idxs,fold_size)
+    train_x <- x[-fold]
+    train_y <- y[-fold]
+    test_x <- x[fold]
+    test_y <- y[fold]
+    reg <- gaussian_kernel_regr(train_x,train_y,test_x,h)
+    y_hat_test <- reg$y_hat
+    errs[i] <- sum((test_y - y_hat_test)^2,na.rm=T)/length(test_y)
+  }
+  estimation <- mean(errs)
+  return(estimation)
+}
+```
+
+1.3.5 Out-of-Sample Expected Prediction Error
+```{r}
+new_sample_err <- function(train_x,train_y,lambda,h,n=10,seed=321){
+  df <- sample_data(n=n,lambda=lambda,seed=seed)
+  test_x <- df$predictors
+  test_y <- df$responses
+  reg <- gaussian_kernel_regr(train_x,train_y,x=test_x,h=h)
+  y_hat <- reg$y_hat
+  return(sum((test_y - y_hat)^2,na.rm = T)/length(test_y))
+}
+```
+
+Using the previous functions we can compute the different error quantities in all of our regressions.
+```{r}
+for (i in 1:4){
+  key.exp <- paste("exp",i,sep='')
+  ex <- exps[[key.exp]]
+  df <- ex$data
+  train_x <- ex$data$predictors
+  train_y <- ex$data$responses
+  lambda <- ex$lambda
+  n <- ex$n
+  
+  # compute by specific value of h
+  h_epes <- rep(NA,4)
+  h_eops <- rep(NA,4)
+  h_errins <- rep(NA,4)
+  h_errs_kfold <- rep(NA,4)
+  h_errs_new <- rep(NA,4)
+  
+  j=1
+  for (h in h_values){
+    reg <- gaussian_kernel_regr(train_x=train_x, train_y=train_y, x=train_x, h=h)
+    W <- reg$W
+    trW <- sum(diag(W))
+    y_hat <- reg$y_hat
+    
+    h_epes[j] <- epe(train_y,y_hat)
+    h_eops[j] <- eop(n,trW)
+    h_errins[j] <- errin(train_x,lambda,h)
+    h_errs_kfold[j] <- kfold_kernel_regr(data=df,k=5,h=h)
+    h_errs_new[j] <- new_sample_err(train_x,train_y,lambda,h)
+    
+    j=j+1
+  }
+  epes[i,] <- h_epes
+  eops[i,] <- h_eops
+  errins[i,] <- h_errins
+  errs_kfold[i,] <- h_errs_kfold
+  errs_new[i,] <- h_errs_new
+}
+```
+
+Visualizations
+```{r}
+plot_list <- list()
+for (i in 1:4){
+  key.exp <- paste("exp",i,sep='')
+  ex <- exps[[key.exp]]
+  # set df to plot with 1 setup, all errors time and h_values colunm
+  df <- data.frame(h_values,as.numeric(epes[i,]),as.numeric(eops[i,]),as.numeric(errins[i,]),as.numeric(errs_kfold[i,]),as.numeric(errs_new[i,]))
+colnames(df) <- c("h","EPE","Eop","ERRin","Err-kfold","Err-Out-Sample")
+df <- melt(df,id="h")
+p <- ggplot(df) +
+  geom_line(aes(h,value,colour=variable)) +
+  theme(legend.title = element_blank()) + 
+  xlab("bandwidth") + ylab("error") +
+  ggtitle(paste("n=",ex$n," lambda=",ex$lambda))
+plot_list[[i]] = p
+}
+```
+
+```{r}
+grid.arrange(
+  plot_list[[1]],plot_list[[2]],plot_list[[3]],plot_list[[4]],
+  nrow=2,ncol=2,
+  top=textGrob("Errors in 4 Kernel Regression Setups",gp=gpar(fontsize=15))
+  )
+```
+
+In Gaussian Kernel, the bandwidth represents the variance of the normal density, which is the kernel function. This means that high bandwidth cause more scale in the normal 'bell', thus makes the weights more tolerant to farther observations. Namely, as h grows, we expect to see high bias in the model, whilst h decreases we expect to see high variance and low bias.
+How bias and variance affect the various quantities among the setups?
+
+EPE:
+This error concerned only about how good the model fit the training example. Therfore, we expect to observe:
+1. EPE lower than other quantities which concerned also about other sampled data. This is indeed happen in all setups.
+2. EPE increases with bandwidth. This is quite happen.
+
+Eop:
+This quantity represents overfitting on training data. Overfitting is mainly caused by introducing too much variance to the model, Therfore this quantity decreasing with a bandwidth increasing (namely model's bias increasing).
+
+k-fold and Out-of-Sample are slighthy going together, as they concerned about unseen data (in k-fold it's the 'test-fold' which is originally part of the training, but it's unseen to the model). We see underfitting in areas with a lot of bias in the model (higher bandwidth). In addition, smaller Lambdas has "sweet point", and this may be caused since lambda parameter affect the amount of 'constant noise' (in contrast to the random noise of epsilon) in the data.
+
+
+
+4
+First of all we will write the given Quardradic Regression Model
+```{r}
+quard_regr <- function(train_x,train_y){
+  reg <- lm(train_y~train_x+I(train_x^2))
+  return(reg)
+}
+```
+
+Because of the new model, we have to do some minor modifications to the ERRin, kfold and Out-of-Sample Err functions.
+```{r}
+quard_errin <- function(train_x,lambda,num_of_samples=10){
+  errs <- rep(NA,num_of_samples)
+  for (i in 1:num_of_samples){
+    y_star <- sample_data(x=train_x,lambda=lambda)$responses
+    reg <- quard_regr(train_x,train_y=y_star)
+    y_hat <- reg$fitted.values
+    errs[i] <- epe(y_star,y_hat)
+  }
+  return(sum(errs)/length(errs))
+}
+
+kfold_quard_regr <- function(data,k=5){
+  # random partitioning
+  x <- data$predictors
+  y <- data$responses
+  n <- nrow(data)
+  fold_size <- n/k # we should consider cases in which n/k isn't integer but we're given that it's indeed integer
+  idxs <- 1:n
+  errs <- rep(NA,k)
+  for (i in 1:k){
+    fold <- sample(idxs,fold_size)
+    train_x <- x[-fold]
+    train_y <- y[-fold]
+    test_x <- x[fold]
+    test_y <- y[fold]
+    reg <- quard_regr(train_x,train_y)
+    test_X_mat <- matrix(c(rep(1,length(test_x)),test_x,I(test_x^2)),
+                         nrow=length(test_x),ncol=3)
+    y_hat_test <- test_X_mat %*% reg$coefficients
+    errs[i] <- sum((test_y - y_hat_test)^2,na.rm=T)/length(test_y)
+  }
+  estimation <- mean(errs)
+  return(estimation)
+}
+
+quard_new_sample_err <- function(train_x,train_y,lambda,n=10,seed=231){
+  df <- sample_data(n=n,lambda=lambda,seed=seed)
+  test_x <- df$predictors
+  test_y <- df$responses
+  reg <- quard_regr(train_x,train_y)
+  y_hat <- reg$fitted.values
+  return(sum((test_y - y_hat)^2,na.rm = T)/length(test_y))
+}
+```
+
+Now, we're able to compute the error quantities
+```{r}
+epes <- rep(NA,4)
+eops <- rep(NA,4)
+errins <- rep(NA,4)
+errs_kfold <- rep(NA,4)
+errs_new <- rep(NA,4)
+
+for (i in 1:4){
+  key.exp <- paste("exp",i,sep='')
+  ex <- exps[[key.exp]]
+  df <- ex$data
+  train_x <- df$predictors
+  train_y <- df$responses
+  lambda <- ex$lambda
+  n <- ex$n
+  reg <- quard_regr(train_x,train_y)
+  y_hat <- reg$fitted.values
+  epes[i] <- epe(y=train_y,y_hat=y_hat)
+  
+  # get Px which equivalent to kernel's weights matrix
+  design_mat <- matrix(c(rep(1,length(train_x)),train_x),
+                       nrow=length(train_x),ncol=2)
+  Px <- design_mat%*%solve(t(design_mat)%*%design_mat)%*%t(design_mat)
+  trPx <- sum(diag(Px)) 
+  eops[i] <- eop(n,trW)
+  
+  errins[i] <- quard_errin(train_x,lambda)
+  
+  errs_kfold[i] <- kfold_quard_regr(df,k=5)
+  
+  errs_new[i] <- quard_new_sample_err(train_x,train_y,lambda)
+}
+```
+
+There is no bandwidth influention here, so we won't benefit a lot from visualaizing. instead we'll get a look from the tabular data.
+```{r}
+data.frame(epes,eops,errins,errs_kfold,errs_new, row.names = combinations)
+```
+
+We'll point out noticeable insights we can draw from the quardradic model compared to the Kernel Regression model.
+Firstlly, as the true function is also polynomial, we see the sample-related quantities are much closer to zero, compared to the kernel regression model. These are the EPE and the ERRin. In general, polynomial models (degree>1) could introduce much more variance to the model compared to linear ones such as the Kernel Regression. This contibutes to a ggod fit to the training set. However, this is also the reason the polynomial model is weaker than the linear as it concerned to generalization. As a result, Out-of-Sample error is extremely increasing here compared to the corresponding linear model.
+
+
+
+# Questoin 2
+first we want to import the data:
+```{r}
+covid_data <- read.csv('israel-covid19-data/IsraelCOVID19.csv')
+# we will change the collom names to get rid of the hebrew
+colnames(covid_data) <- c('Date', 'Total_Cases','New_cases', 'Moderate', 'severe', 'Deceased', 'Total_Recovered', 'New_Recovered', 'Tested_Today', 'Total_Tested',  'Percent_Positive', 'GF_Normalized_to_Tests',	'Baseline')
+# we will also remove the last row since it has no information
+covid_data <- covid_data[1:nrow(covid_data)-1,]
+```
+
+we want to make a figgure showing number of new cases per day, lets see it at a first glimps:
+```{r}
+covid_data$Date <- as.Date(covid_data$Date, format="%d/%m/%Y")
+covid_fig <- ggplot(data = covid_data, aes(x = Date)) + geom_point(aes(y = New_cases),color = 'blue',  alpha = .75)
+covid_fig
+```
+
+now we have our initial fig we need to calculate the regression curve using a loess model
+```{r}
+# let's add a column with the day number of the pandemic (in the data)
+covid_data <- covid_data[,1:3]
+covid_data$day_number <- c(1:nrow(covid_data))
+# now we can fit our regression curve, playing with different span levels gives different fits, 0.3 gives nive results.
+reg_curve <- loess(covid_data$New_cases ~ covid_data$day_number , span = 0.3)
+
+covid_fig <- covid_fig + geom_line(aes(y=reg_curve$fitted), color = 'red') +
+  labs(title = 'New cases of Covid-19 per day, with fitted regression line', x = 'date',y = 'new cases') +
+  theme(plot.title = element_text(hjust = 0.5))
+covid_fig                               
+```
+
+Seif 2.2
+Here we will want to look at the rate of new detections per day, to do this we will look at thefirst-derivative of the
+regression curve from part 1.
+```{r}
+derivative <- diff(reg_curve$fitted)/diff(covid_data$day_number)
+deriv_df <- as.data.frame(cbind(covid_data[1:nrow(covid_data)-1,], derivative))
+
+#dX <- rembed(X,2)) # centers the X values for plotting
+
+ggplot(deriv_df) + geom_line(aes(Date, y = derivative), color = 'red', size=1.5) +
+  labs(title = "Detection Rate of New Covid-19 cases per day", x = "date", y = "derivative of new cases") +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+Q3 FMRI data
+first thing we want to do is import the data
+```{r}
+raw_data <- load('fMRIclass_new.RData')
+load("wavpyr.RData")
+```
+
+cool, so we have all the data, now we can work on making our regression model. 
+we want to make a regression model that can predict the response of our 15 brain voxels to images.
+for this we have a training set of 1750 observations, and 10921 features.
+```{r}
+#the fist thing we will do is split the data in to our own train and test set, using 80% for train. 
+#this we will do so we can get faster results then we would using cross validiation
+X <- feature_train
+y <- train_resp # we will notice that our y is a matrix with 15 coloumns, not a vector
+sample <- sample(1:nrow(feature_train), size = 0.25*nrow(feature_train))
+X_train <- X[-sample,]
+X_test <- X[sample,]
+y_train <- y[-sample,]
+y_test <- y[sample,]
+```
+
+
+In order to decrease the dimension of our design matrix, we chose to model this problem by regression with a Lasso regularization. In this regularization type, we use a L1 norm over the coefficients, leading to higher probabilities for coefficients to be zero (compared to Ridge Regression, in which the probs are close to zero). As a result, a significant amount of feature wil be reduced from our model. This will lead to reduce computation time and also reduce the model's variance.
+```{r}
+# first we will define a function that finds the lasso regression for each voxel
+voxel_lasso <- function(voxel, X_train, X_test, Y_train, Y_test){
+  # we choose alpha =1 so we get a lesso regresssion
+  cv_fit <- cv.glmnet(X_train, Y_train[,voxel], type.measure = "mse" ,alpha=1, family = "gaussian")
+  optimal_lambda <- cv_fit$lambda.1se
+  model <- glmnet(X_train,  Y_train[,voxel], alpha=1, lambda = optimal_lambda)
+  train_preds <- predict(model, s = optimal_lambda, newx = X_train)
+  test_preds <- predict(model, s = optimal_lambda, newx = X_test)
+  # now we have the model, we need to see the errors
+  train_mse <- mean((Y_train[,voxel] - train_preds)^2)
+  test_mse <- mean((Y_test[,voxel] - test_preds)^2)
+  model_results = list(train_mse = train_mse, test_mse = test_mse, model = model)
+    return (model_results)
+}
+```
+
+Now we have the function we need, all we need to do is run it on all 15 voxels:
+```{r}
+# first we need empty lists that will take the errors:
+train_errors <- c()
+test_errors <- c()
+models = list()
+
+# now we have place to keep all the data we can loop throug the voxels:
+
+for(voxel in 1:15){
+  model <-  voxel_lasso(voxel, X_train, X_test, y_train, y_test)
+  train_errors <- c(train_errors, model$train_mse)
+  test_errors <- c(test_errors, model$test_mse)
+  models[[voxel]] = model$model
+}
+```
+
+Now we have fitted a model for each voxel! 
+the models are all kept in the model list, and we have the train and test data kept aswell. 
+3.2
+In this Qustion we want to look at the voxel whos model works best, we will choose the voxel with the smallest test error. 
+```{r}
+voxel <- which.min(test_errors)
+print(paste('the voxel with smallest test error is voxel number', voxel))
+```
+
+To find important features, the first thing we can do is look at the features that wern't "zerod" by the lasso moddel:
+```{r}
+non_zero_coefs <- which(coef(models[[voxel]])!=0)
+```
+
+Now we will choose the correlation between the featurs and responses as our metirc to choose the important features. 
+The reason we chose the correlation is to do with the fact that we are deelin with linear regression. liner models are examining the linear relationship between the responces and the predictors, as well as the relationship between the predictors themselves.  
+```{r}
+correlations <- rep(NA, length(non_zero_coefs))
+
+for (i in 1:length(non_zero_coefs)){
+  correlations[i] <- cor(feature_train[,non_zero_coefs[i]], train_resp[,voxel])
+}
+# now we have all the correlations, let's see the highest
+print(paste('the feature with the highest correlation is', non_zero_coefs[which.max(abs(correlations))], ' and it has a correlation of', max(abs(correlations))))
+best_coeff <- non_zero_coefs[which.max(abs(correlations))]
+```
+
+We will now plot our "best" coeficiant with the respnose:
+```{r, message=FALSE, warning=FALSE}
+df_for_graph <- as.data.frame(cbind("x"= feature_train[,best_coeff], "y" =train_resp[,voxel] ))
+
+ggplot(df_for_graph, aes(x,y))+ 
+  geom_point()+
+  stat_smooth(method = "loess", col = "blue") +
+  labs(title = 'Scatter plot of the highest correlated feature to the voxel 2, and voxel 2', x = 'Feature number 1744', y ='Voxel 2 BOLD') +
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+Looking at this plot we can see a positive correlatoin. However the relationship seems either parabolic or logarithmic, and not linear. Furthermore we can see heteroscedasticity in the data, meaning the variance is icreasing with the value of the predictor. 
+To deel with this, we will try bith logarithmic transformation of the data to see if thius can get us better results. 
+since we have negatice values in our response, we will add the ABS of the minimal value (+ a small epsilon) to all the response values. This way the log tranformatin will be well defined, but we will still not change the correlation.
+
+```{r}
+voxel_2_log <- log(train_resp[,voxel] +abs(min(train_resp[,voxel])) + 0.00001)
+cor(voxel_2_log, feature_train[,best_coeff])
+```
+
+Unfortinatly, we actually got a worse result here, meaning the correlation after the transformation is lower, this might be due to the fact the heteroscedasticity is caused by the variablity of the predictor, rather then the response (as we can see in the plot).
+This indicates that applying the log transformation to the predictor (X) might be helpgull (even though it does not make the relationship linear)
+
+```{r}
+cor(log(feature_train[,best_coeff]), train_resp[,voxel])
+```
+
+We can see that as we suspected applying the transformation to the X increases the correlation. 
+This rases an idea of retraining our model after apllying log to all our remaining predictors. 
+
+3.3
+we will now make prediction using our new, simpliffied model.
+to do this we need to first deel with the fact that we have some 0 values in our predictors and log(0) is undeffiened. 
+to deal with this we will scale all our predictors, and than add an small epsilon to each predictoer, this way we will have no 0 values, while maintaing the original relationship between the predictors and the resposne. 
+then we will retrain our linear model and make the predictoins:
+```{r}
+epsilon <- 0.0000001
+preds = data.frame(matrix(ncol =15 , nrow = 120))
+
+#denominator <- apply(feature_train ,MARGIN = 2,FUN=sd)
+#X <- (feature_train/denominator) + epsilon
+
+X <- log(feature_train + epsilon)
+sample <- sample(1:nrow(feature_train), size = 0.25*nrow(feature_train))
+X_train <- X[-sample,]
+X_test <- X[sample,]
+y_train <- y[-sample,]
+y_test <- y[sample,]
+
+
+train_errors <- c()
+test_errors <- c()
+models = list()
+
+# now we have place to keep all the data we can loop throug the voxels:
+
+for(voxel in 1:15){
+  model <-  voxel_lasso(voxel, X_train, X_test, y_train, y_test)
+  train_errors <- c(train_errors, model$train_mse)
+  test_errors <- c(test_errors, model$test_mse)
+  models[[voxel]] = model$model
+}
+```
+
+Now we have our model, all we need to so is fill in the predictions with vector multiplication.
+
+```{r}
+test_featuers <- log(feature_valid + epsilon)
+
+for (i in 1:15){
+  preds[,i] <- predict(models[[i]], test_featuers)
+}
+```
+
+And finally we can save our results to aRdata file.
+```{r}
+save(preds, test_errors, file='ES_YF_predictions.Rdata')
+```
+
+
+

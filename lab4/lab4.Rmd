@@ -1,0 +1,375 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+---
+```{r setup, include=FALSE}
+library(R.utils)
+library(gbm)
+library(caret)
+library(ggplot2)
+library(glmnet)
+
+```
+
+Script for downloading the data
+```{r}
+
+# From github/daviddalpiaz... 
+# https://gist.github.com/daviddalpiaz/ae62ae5ccd0bada4b9acd6dbc9008706
+
+
+#labels are stored in the y variables of each data frame
+# can easily train many models using formula `y ~ .` syntax
+
+# download data from http://yann.lecun.com/exdb/mnist/
+if (!file.exists("train-images-idx3-ubyte")){
+    
+    download.file("http://yann.lecun.com/exdb/mnist/train-images-idx3-ubyte.gz",
+              "train-images-idx3-ubyte.gz")
+    download.file("http://yann.lecun.com/exdb/mnist/train-labels-idx1-ubyte.gz",
+              "train-labels-idx1-ubyte.gz")
+    download.file("http://yann.lecun.com/exdb/mnist/t10k-images-idx3-ubyte.gz",
+              "t10k-images-idx3-ubyte.gz")
+    download.file("http://yann.lecun.com/exdb/mnist/t10k-labels-idx1-ubyte.gz",
+              "t10k-labels-idx1-ubyte.gz")
+
+# gunzip the files
+    R.utils::gunzip("train-images-idx3-ubyte.gz")
+    R.utils::gunzip("train-labels-idx1-ubyte.gz")
+    R.utils::gunzip("t10k-images-idx3-ubyte.gz")
+    R.utils::gunzip("t10k-labels-idx1-ubyte.gz")
+}
+
+# helper function for visualization
+show_digit = function(arr784, col = gray(128:1 / 128), ...) {
+    image(matrix(as.matrix(arr784[-785]), nrow = 28)[, 28:1], col = col, ...)
+}
+
+# load image files
+load_image_file = function(filename) {
+    ret = list()
+    f = file(filename, 'rb')
+    readBin(f, 'integer', n = 1, size = 4, endian = 'big')
+    n    = readBin(f, 'integer', n = 1, size = 4, endian = 'big')
+    nrow = readBin(f, 'integer', n = 1, size = 4, endian = 'big')
+    ncol = readBin(f, 'integer', n = 1, size = 4, endian = 'big')
+    x = readBin(f, 'integer', n = n * nrow * ncol, size = 1, signed = FALSE)
+    close(f)
+    data.frame(matrix(x, ncol = nrow * ncol, byrow = TRUE))
+}
+
+# load label files
+load_label_file = function(filename) {
+    f = file(filename, 'rb')
+    readBin(f, 'integer', n = 1, size = 4, endian = 'big')
+    n = readBin(f, 'integer', n = 1, size = 4, endian = 'big')
+    y = readBin(f, 'integer', n = n, size = 1, signed = FALSE)
+    close(f)
+    y
+}
+```
+
+```{r}
+# load images
+train_data = load_image_file("train-images-idx3-ubyte")
+test_data  = load_image_file("t10k-images-idx3-ubyte")
+
+# load labels
+train_data$y = as.factor(load_label_file("train-labels-idx1-ubyte"))
+test_data$y  = as.factor(load_label_file("t10k-labels-idx1-ubyte"))
+```
+
+Since we want to build a classifier for telling apart the digit 1 from the digit 7, we only need to keep the rows in our data that represnt either the number 1 or 7.
+```{r}
+train_data <- train_data[train_data$y==1|train_data$y==7,]
+test_data <- test_data[test_data$y==1|test_data$y==7 ,]
+```
+
+According to the problem definition in the directions the digit 1 is the positive respone and the digit 7 is the negative response, so we'll encode them as 1 and 0 accordingly.
+```{r}
+train_data$y <- ifelse(train_data$y == 1, 1,0)
+test_data$y <- ifelse(test_data$y == 1, 1,0)
+```
+
+Our data at the moment has 784 exlpanatory featurs, this is a large number that we might want to reduce if possible, the first thing we can do is get rid of any feature (column) that has no variance in the training data (meaning it has only one unique vaule in its entries). These columns are the same for any example, so they do not help us in any way in our attmept to classify between 2 options.
+We will use a function that finds the features with very small vairainve in them, then we will remove the found columns.
+```{r}
+toremove <- nearZeroVar(train_data)
+droplist <- colnames(train_data)[toremove]
+train_data_var <- train_data[, !colnames(train_data) %in% droplist]
+```
+
+Now we are left with a dataset with "only" 154 explanatory features.
+We need to do the same for the test data.
+
+```{r}
+test_data_var <- test_data[, !colnames(test_data) %in% droplist]
+```
+
+1
+We will fit gradient boosting trees (from the classification trees family).
+Our design steps will be as follows:
+As gbm has 3 main hyperparameters - B, lambda and d - it will be computationally too exapansive to consider many combinations of them, therfore we'll set B=100 (we know we couldv'e set it to a significantly larger number in terms of one model,e.g B=1000, but for debugging our code and knit the notebook it was way too much time for us to wait for the training), and will examine the others. d=1 is a one split tree called Decision Stump. This kind of tree makes every tree consider only one variable in the decision, thus represents no interaction between predictors in our model. Therfore, the difference between d=1 and d=2 is essential for us to examine. On the other hand, deep trees will overfit to the particular form of our training data. Shrinkage parameter as a deep connection to B parameter as larger B's let the lambda's be smaller and thus reduce variance of our model. As our B is constant, we we'll examine three different lambdas, and combine them with three different d's.
+To conclude, we will train 9 different setup's of hyperparameters.
+Afterwards, we would like to find the threshold in which the tp and the (1-fp) rates (over the train set) overlap each other (the latter is also the tn rate), as by the roc curve this point represents the optimal threshold for the specific fitted algorithm. We can't examine all continuous possible values of t, so we'll examine the vector seq(0,1,0.1). We will do this by answering question 2 and 3 beforhand. Lastly, we will compute the test error of this hyperparameters and threshold combination, and take the combination which minimizes it.
+
+Q2
+```{r}
+conf_matrix <- function(preds, true_values, t){
+  pred_response <- ifelse(preds>t, 1, 0)
+  tp <- sum(pred_response[which(true_values==1)])
+  fp <- sum(pred_response[which(true_values==0)])
+  tn <- length(pred_response[which(true_values==0)])-fp
+  fn <- length(pred_response[which(true_values==1)])-tp
+  tpr <- tp/length(pred_response[which(true_values==1)])
+  fpr <- fp/length(pred_response[which(true_values==0)])
+  tnr <- 1-fpr
+  fnr <- 1-tpr
+  df <- data.frame(list(no_count=c(tn,fn),
+                  yes_count=c(fp,tp),
+                  no_rate=c(tnr,fnr),
+                  yes_rate=c(fpr,tpr)),
+             row.names = c("negative","positive"))
+  return(df)
+}
+```
+
+Now, we can implement our designation from above:
+gbm's training
+TODO: Turning off verbosity
+```{r}
+# hyperparameters
+B=100
+gbm.hyper_grid <- expand.grid(
+  lambda = c(0.01,0.1,0.3),
+  d = c(1,3,5),
+  # a place to dump results
+  t = NA,
+  test_error = NA 
+)
+thresholds <- seq(0,1,by=0.1)
+
+for (i in 1:nrow(gbm.hyper_grid)){
+  set.seed(123)
+  # training
+  gbm.tune <- gbm(y~., data=train_data_var,
+    n.trees = B, shrinkage = gbm.hyper_grid$lambda[i], interaction.depth = gbm.hyper_grid$d[i],
+    distribution = "bernoulli")
+  
+  train_preds <- predict(object = gbm.tune,
+        newdata = train_data_var,
+        n.trees = B,
+        type = "response")
+  
+  # tuning thresholds
+  diffs <- rep(NA, length(thresholds))
+  j=0
+  for (t in thresholds){
+    j=j+1
+    mat <- conf_matrix(train_preds,train_data_var$y,t)
+    fpr <- mat$yes_rate[1]
+    tpr <- mat$yes_rate[2]
+    diffs[j] <- abs(tpr - (1-fpr))
+  }
+  t <- thresholds[which.min(diffs)]
+  gbm.hyper_grid$t <- t
+  
+  # get test error
+  test_preds <- predict(object = gbm.tune,
+      newdata = test_data_var,
+      n.trees = B,
+      type = "response")
+  
+  test_preds <- ifelse(test_preds>t,1,0)
+  test_error <- 1 - sum(test_data_var$y == test_preds)/length(test_data_var$y)
+  gbm.hyper_grid$test_error[i] <- test_error
+}
+```
+
+```{r}
+gbm.hyper_grid
+```
+
+Firstlly, we may notice that all optimal t's are 0.5. It's not surprising since we don't prefer type-I error (predict 1 while true is 7) over type-II and vice versa. In addition, as our B is relatively small, the corresponding shrinkage and depth are larger to avoid underfitting of our model to the training data.
+Now, we can train the final model with the hyperparameters which minimize test error
+
+```{r}
+gbm.opt_hypers <- gbm.hyper_grid[which.min(gbm.hyper_grid$test_error),]
+
+model.tree <- gbm(y~., data=train_data_var,
+    n.trees = B, shrinkage = gbm.opt_hypers$lambda, interaction.depth = gbm.opt_hypers$d,
+    distribution = "bernoulli")
+```
+
+
+The 2nd classifier will be the logistic regression (from the discriminative family).
+We will regularize our model, which implies a hyperparameter lambda of the regularization term. Also, we have the alpha hyperparameter, which will determine whether we peanalize the weights vector by the lasso, ridge or elastic net method. By slide 8 in lect11 we know that the optimal thrshold here is t=0.5 (as we don't prioritize type-I vs. type-II error). We will choose the model with the corrsponding lambda and alpha which will minimize test error.
+```{r}
+# hyperparameters
+glm.hyper_grid <- expand.grid(
+  lambda = c(0.01,0.1,0.3),
+  alpha = c(0,0.5,1),
+  test_error = NA # a place to dump results
+)
+
+predictors <- as.matrix(train_data_var[,!colnames(train_data_var) %in% c('y')])
+test_mat <- as.matrix(test_data_var[,!colnames(train_data_var) %in% c('y')])
+
+for (i in 1:nrow(glm.hyper_grid)){
+  set.seed(123)
+  # training
+  logreg.tune <- glmnet(x=predictors, y=train_data_var$y, family = "binomial",
+                       alpha = glm.hyper_grid$alpha[i], lambda=glm.hyper_grid$lambda[i])
+  
+  # get test error
+  test_preds <- predict(logreg.tune, test_mat, type="response")
+  test_preds <- ifelse(test_preds>0.5,1,0)
+  test_error <- 1 - sum(test_data_var$y == test_preds)/length(test_data_var$y)
+  glm.hyper_grid$test_error[i] <- test_error
+}
+```
+
+```{r}
+glm.hyper_grid
+```
+
+The optimal model includes ridge regularization and a relatively small alpha for regularization.
+Now we'll set the logsitic regression model with the optimal hyperparameters we've found.
+```{r}
+glm.opt_hypers <- glm.hyper_grid[which.min(glm.hyper_grid$test_error),]
+
+model.logreg <- glmnet(x=predictors, y=train_data_var$y, family = "binomial",
+                       alpha = glm.opt_hypers$alpha, lambda=glm.opt_hypers$lambda)
+```
+
+
+Q3
+```{r}
+draw_roc <- function(preds,y,thresholds,name=""){
+  #compute fpr, tpr
+  mat <- matrix(NA, nrow=0,ncol = 2)
+  for (t in thresholds){
+  mat <- rbind(mat,conf_matrix(preds,y,t=t)$yes_rate)
+  }
+  # plot
+  mat <- as.data.frame(mat)
+  ggplot(data=mat) +
+    geom_line(aes(x=V1,y=V2)) +
+    geom_abline(intercept = 0, slope = 1, linetype="dashed") +
+    ggtitle(paste(name, "ROC curve",sep = '\n')) + xlab("false positive rate") + ylab("true positive rate")
+}
+```
+
+```{r}
+model.tree.test_preds <- predict(object = model.tree,
+      newdata = test_data_var,
+      n.trees = B,
+      type = "response")
+
+model.logreg.test_preds <- predict(model.logreg, test_mat, type="response")
+```
+
+```{r}
+p1 <- draw_roc(
+  model.tree.test_preds,
+  test_data_var$y,
+  seq(0,1,0.001),
+  name="Gradient Boosting Trees")
+p2 <- draw_roc(
+  model.logreg.test_preds,
+  test_data_var$y,
+  seq(0,1,0.001),
+  name="Ridge Logistic Regression")
+
+grid.arrange(p1,p2,nrow=1)
+```
+
+
+Q 4
+
+We will look at 4 examples in which the GBM classifiar predicted incorectly and see if we can see why our classifiar got it wrong:
+
+```{r}
+final_preds_bgm <- ifelse(model.tree.test_preds > 0.5 , 1,0)
+final_preds_glm <- ifelse(model.logreg.test_preds > 0.5 , 1,0)
+wrong <- test_data[final_preds_bgm != test_data$y,]
+```
+
+We will now randomly choose 4 wrong classifications:
+
+```{r}
+set.seed(770)
+wrong_class <- sample(1:nrow(wrong), 4 , replace = FALSE)
+show_digit(wrong[wrong_class[1],])
+print(paste('this digit is a', ifelse(wrong[wrong_class[1],]$y ==0 , 7,1) ,'but was classified incorrectly'))
+```
+
+Althoug this digit is a 7, even a humen classifier could get this wrong. For a start the verticle line is completly strain as one would expect in a 1, and the line to right could easily be confused as the top of a 1.
+
+```{r}
+show_digit(wrong[wrong_class[2],])
+print(paste('this digit is a', ifelse(wrong[wrong_class[2],]$y ==0 , 7,1) ,'but was classified incorrectly'))
+```
+
+This is a hard case, even a humen could get this one wrong. The engle between the two lined is rather sharp for a 7 and the top line is shorter than you might expect. 
+
+
+```{r}
+show_digit(wrong[wrong_class[3],])
+print(paste('this digit is a', ifelse(wrong[wrong_class[3],]$y ==0 , 7,1) ,'but was classified incorrectly'))
+```
+
+This case too is very hard.  The verticle line is straiter than normally seen in a 7 and the angle at the top is quite "soft", this and more makes it hard to see it's a 7/ 
+```{r}
+show_digit(wrong[wrong_class[4],])
+print(paste('this digit is a', ifelse(wrong[wrong_class[4],]$y ==0 , 7,1) ,'but was classified incorrectly'))
+```
+
+As apose to previous example this image is a litttle more strait forward and we may have expected the classifier to get this one right.
+but yet similarly to the previous examples, this image isn'e very clear, the lines are rather thin the line spliting the seven isn't so clear. 
+
+To sum it up, all these exapmles (or at least the first 3) have some unique featurs to them wich probably didn't appear in many examples in the training data, so it is not suprising that the classifiers didn't learn to classify them.
+
+Q5
+Do you expect both of your fitted
+classifiers to work well on this image? Why or why not?
+
+we can see that the picture we are asked about is a reversed version of the oiginal number (negative). We need to understand how are algorithms work to understand how well they can predict the negative.
+
+In general, Desicion Tree algorithms (including boosted trees) makes trees that classify the data by the values given in the nodes. So this algorithm is learning from the actual values of the features, as in the numbers themselves. This is why small changes in the data can cause large changes in the structure of the decision trees and the predictions. Because of this we can expect that this algorithm won't be able to "see"  the negative shape and will do poorly in predicting the image. 
+
+As for our logestic regression model, in this model we are fitting a sigmoid to the predicting features. So at the end of the day when we have the negative values of the features, when being fitted to the sigmoid we can't expect the predictions to be any good. In other words here as well we can't expect our classifier to learn the boundaries of the shapes being classified (as may be possible in a neural nets).
+
+In general, both these algorithms are learning from the actual numbers in the training data features. So if we try predicting an example with a different scale (as in a linear trasformation of the original scale, for example a negtive scale) we will need to retrain the classifier to get relevent predictions. 
+
+Let's see how well this works in practice as well by creating a negative data set and trying to predict.
+we can do this by doing 255 minus the value of every cell in the data frame :
+```{r}
+negative_set <- 255 - test_data
+negative_set_var <-  255 - test_data_var
+show_digit(negative_set[3,])
+negative_set$y <- test_data$y
+test_preds_neg_gbm <- predict(object = model.tree,
+      newdata = negative_set_var,
+      n.trees = B,
+      type = "response")
+test_preds_neg_gbm <- ifelse(test_preds_neg_gbm > 0.5 , 1,0)
+tree_neg_acc <- sum(test_preds_neg_gbm == test_data$y)/length(test_preds_neg_gbm)
+print(paste('The accuracy of the GLM classifier on the nagative dataset is', round(tree_neg_acc,3)*100, '%'))
+```
+
+We can see that as we expected the GBM model indeed finds it very hard to predict the negative.
+Now let's have a look at the LGM model:
+
+```{r}
+test_mat_neg <- as.matrix(negative_set_var[,!colnames(negative_set_var) %in% c('y')])
+test_preds_neg_glm <- predict(model.logreg, test_mat_neg, type="response")
+test_preds_neg_glm <-  ifelse(test_preds_neg_glm > 0.5 , 1,0)
+glm_neg_acc <- sum(test_preds_neg_glm == test_data$y)/length(test_data$y)
+print(paste('The accuracy of the GLM classifier on the nagative dataset is', round(glm_neg_acc,3)*100, '%'))
+```
+
+We can see that the GLM classifier did very poorly on this negative data set, in fact the results are so bad we might actually get descent predictions by reversing the classifiers prediction. 
+

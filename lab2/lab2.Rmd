@@ -1,0 +1,394 @@
+---
+title: "lab_II"
+author: "204814891, 204169320"
+date: "2/6/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+rm(list=ls())
+set.seed(111)
+library(dae)
+library(ggplot2)
+library(reshape2)
+library(cowplot)
+```
+
+1.1
+We will generate the first 10 coordinates of our mean vector.
+Since we can't multiple objects in r, we will make 30 long vectors of normal distributed values with a mean of 0 and a variance of 1, then we will split the long vector to 3 vectors to get the first  10 values of our mean vectors.
+```{r}
+means_vec <- rnorm(30, 0, 1)
+mu1_first10 <- means_vec[1:10]
+mu2_first10 <- means_vec[11:20]
+mu3_first10 <- means_vec[21:30]
+```
+
+1.2
+Now, we will define a function that will return a dataset of 100Xp for a given p, first 10 values of mean vectors, and sigma squared:
+```{r}
+make_data_set <- function(p, mu1_first10, mu2_first10, mu3_first10, sig_sq){
+  zeros <- rep(0, p-10)
+  
+  sigma_matrix <- sig_sq * diag(p)
+  mu1 <- c(mu1_first10, zeros)
+  mu2 <- c(mu2_first10, zeros)
+  mu3 <- c(mu3_first10, zeros)
+  for (i in 1:100){
+    if (i<11) {
+      v = rmvnorm(mu1, sigma_matrix)
+      } else if (i>10 & i <21){
+        v = rmvnorm(mu2, sigma_matrix)
+      } else {v = rmvnorm(mu3, sigma_matrix)}
+    
+    if (i == 1){df <- t(as.data.frame(v))
+    } else{df <- as.data.frame(rbind(df, v))}
+    
+  }
+  return(df)
+}
+```
+
+1.3
+Now, we will choose four levels of sigma^2 to generate our datasets with.
+```{r}
+sig1 <- 0.1
+sig2 <- 0.5
+sig3 <- 1
+sig4 <- 2
+sigmas <- c(sig1, sig2, sig3, sig4)
+p1 <- 10
+p2 <- 20
+p3 <- 50
+x <- 33
+p_vals <- c(p1, p2, p3)
+```
+
+In question 1.4 we are asked to make multiple data sets for each combination of sigma^2 and p. We will be doing this a bit later. First we will make a function that runs k-means and a PCA'd version of k-means and calculates the accuracy and runtime of each algorithm. 
+For this we need a function that calculates the accuracy of a k-means. Since in our case each vector is made using one of 3 different mean vector, we will assume that the clusters should cluster according to this division. 
+Therfore, we can define the accuracy as the max number of vectors made from the same distribution divided by the total number of vectors in the cluster over all clusters.
+
+```{r}
+accuracy <- function(clusters){
+orig <- c(rep(1, 20), rep(2, 30), rep(3, 50))
+mixed_matrix <- table(orig,clusters)
+accuracy <-sum(apply(mixed_matrix, 1, max))/sum(apply(mixed_matrix, 1, sum))
+return(accuracy)
+}
+```
+
+
+```{r}
+get_kmeans_time_acc <- function(df){
+  cl_start <- Sys.time()
+  cl <- kmeans(df, 3)
+  cl_end <- Sys.time()
+  cl_time = cl_end-cl_start
+  cl_acc <- accuracy(cl$cluster)
+  pca <- prcomp(df)
+  pca_df <- pca$x[,1:3]
+  pca_start <- Sys.time()
+  cl_pca <- kmeans(pca_df, 3)
+  pca_end <- Sys.time()
+  pca_time <- pca_end - pca_start
+  pca_acc <- accuracy(cl_pca$cluster)
+  time_n_acc <- c(cl_time, cl_acc, pca_time, pca_acc)
+  return(time_n_acc)
+}
+```
+
+1.4 - 1.5
+We made the function that computes both types of k-means, and saves their accuracy and run time.
+Now, we will run this 50 times on each combination of sigma^2 and p.
+We will save all the accuracies and run times in a data frame, such that each combination of p and sigma^2 will have it's own data frame: 
+```{r}
+# first we will make an empty df to insert all the values in to. 
+# we have 4 sigma values and 3 p values so we need a 3X4 df for each field and each algorithm 
+df_acc_avg <- as.data.frame(matrix(nrow = 3, ncol = 4))
+rownames(df_acc_avg) <- c('p = 10', 'p = 20', 'p = 50')
+colnames(df_acc_avg) <- c('sig = 0.1', 'sig = 0.5', 'sig = 1', 'sig = 2')
+
+df_acc_std <- as.data.frame(matrix(nrow = 3, ncol = 4))
+rownames(df_acc_std) <- c('p = 10', 'p = 20', 'p = 50')
+colnames(df_acc_std) <- c('sig = 0.1', 'sig = 0.5', 'sig = 1', 'sig = 2')
+
+df_time_avg <- as.data.frame(matrix(nrow = 3, ncol = 4)) 
+rownames(df_time_avg) <- c('p = 10', 'p = 20', 'p = 50')
+colnames(df_time_avg) <- c('sig = 0.1', 'sig = 0.5', 'sig = 1', 'sig = 2')
+
+df_acc_avg_pca <- as.data.frame(matrix(nrow = 3, ncol = 4))
+rownames(df_acc_avg_pca) <- c('p = 10', 'p = 20', 'p = 50')
+colnames(df_acc_avg_pca) <- c('sig = 0.1', 'sig = 0.5', 'sig = 1', 'sig = 2')
+
+df_acc_std_pca <- as.data.frame(matrix(nrow = 3, ncol = 4))
+rownames(df_acc_std_pca) <- c('p = 10', 'p = 20', 'p = 50')
+colnames(df_acc_std_pca) <- c('sig = 0.1', 'sig = 0.5', 'sig = 1', 'sig = 2')
+
+df_time_avg_pca <- as.data.frame(matrix(nrow = 3, ncol = 4)) 
+rownames(df_time_avg_pca) <- c('p = 10', 'p = 20', 'p = 50')
+colnames(df_time_avg_pca) <- c('sig = 0.1', 'sig = 0.5', 'sig = 1', 'sig = 2')
+# now we can loop 50 times throug all the combinations to see the accuracy and time:
+
+for (p in p_vals){
+  for (sig in sigmas){
+    cl_time <- c()
+    cl_acc <- c()
+    pca_time <- c()
+    pca_acc <- c()
+    for (i in 1:50){
+      df <- make_data_set(p,mu1_first10, mu2_first10, mu3_first10, sig)
+      vals <- get_kmeans_time_acc(df)
+      cl_time <- c(cl_time, vals[1])
+      cl_acc <- c(cl_acc, vals[2])
+      pca_time <- c(pca_time, vals[3])
+      pca_acc <- c(pca_acc, vals[4])
+    }
+    df_acc_avg[which(p_vals == p),which(sigmas == sig)] = mean(cl_acc)
+    df_acc_std[which(p_vals == p),which(sigmas == sig)] = sd(cl_acc)
+    df_time_avg[which(p_vals == p),which(sigmas == sig)] = sd(cl_time)
+    df_acc_avg_pca[which(p_vals == p),which(sigmas == sig)] = mean(pca_acc)
+    df_acc_std_pca[which(p_vals == p),which(sigmas == sig)] = sd(pca_acc)
+    df_time_avg_pca[which(p_vals == p),which(sigmas == sig)] = sd(pca_time)
+  }
+}
+```
+
+1.6
+We will plot 3 bars for every p, such that the hight equals to accuracy, and will add error bars. We will use different colours for with and without pca.
+```{r}
+df_sd <- melt(t(df_acc_std))
+df_graph <- melt(t(df_acc_avg))
+df_graph$upper = df_graph$value + df_sd$value
+df_graph$lower = df_graph$value - df_sd$value
+
+p1 <- ggplot(data = df_graph, aes(x = Var1, y = value, fill = Var2)) + 
+  geom_bar(stat="identity", width=.5, position = "dodge") + 
+  geom_errorbar(aes(ymin=lower, ymax=upper),position = "dodge", width=.5) +
+  ylim(0,1) + labs(x = 'sigma^2 value of cov matrix', y = 'accuracy', title = 'accuracy rates for k-means')
+
+df_sd_pca <- melt(t(df_acc_std_pca))
+df_graph_pca <- melt(t(df_acc_avg_pca))
+df_graph_pca$upper = df_graph_pca$value + df_sd_pca$value
+df_graph_pca$lower = df_graph_pca$value - df_sd_pca$value
+
+p2 <-   ggplot(data = df_graph_pca, aes(x = Var1, y = value, fill = Var2)) + 
+  geom_bar(stat="identity", width=.5, position = "dodge") + 
+  geom_errorbar(aes(ymin=lower, ymax=upper),position = "dodge", width=.5) +
+  ylim(0,1) + labs(x = 'sigma^2 value of cov matrix', y = 'accuracy', title = 'accuracy rates for k-means after PCA')
+  
+plot_grid(p1, p2, labels = "AUTO")
+```
+
+1.7
+Now, we will make a similar plot for the avarege running time of each algorithm.
+```{r warning=FALSE}
+df_time <- melt(t(df_time_avg))
+df_time$pca_time <- melt(t(df_time_avg_pca))$value
+
+t1 <- ggplot(data = df_time, aes(x = Var1, y = value, fill = Var2)) + 
+  geom_bar(stat="identity", width=.5, position = "dodge") + 
+  ylim(0,0.001) + labs(x = 'sigma^2 value of cov matrix', y = 'average run time (seconds)', title = 'Run time for k-means algorithm')
+
+t2 <- ggplot(data = df_time, aes(x = Var1, y = pca_time, fill = Var2)) + 
+  geom_bar(stat="identity", width=.5, position = "dodge") + 
+  ylim(0,.001) + labs(x = 'sigma^2 value of cov matrix', y = 'average run time (seconds)', title = 'Run time for k-means algorithm on 3 PCA componints')
+
+plot_grid(t1, t2, labels = "AUTO")
+
+```
+
+1.8: summarizing:
+Accuracy:
+We can see at a glance that with higher levels of sigma^2 we get lower accuracy levels, and the std of the accuracy is smaller, meaning that we consistently get lower accuracy levels. This makes a lot of sense since a higher sigma^2 means we get more noise when computing the values of our vectors, and therfore we can expect the clustering to be less accurate. 
+
+It seems however that the length of the vector (value of p) does not have a significant effect on the accuracy. This is quite surprising since the coordinates of the vectors, beyond 10, were all computed from the same distribution, so one might expect that longer vectors would bring down the accuracy. In practice we can see that the algorithm isn't sensitive to this noise.
+
+Another interesting finding is that there apears to be no significant difference in the accuracy between results with & without PCA. This is also quite surprising since we are loosing information in PCA procces. However, it appears that the information we do have in the 3 first PCA components is enough to classifiy just as well as the pre-PCA data.  
+
+Run Time:
+The first thing we can see is that the PCA'ed data seems to run faster on average, for any given sigma^2. Considering the fact the the PCA does just as well on accuracy it makes it worth while to run the clustering with the PCA data (although it can take time to run the PCA).
+Regarding the different values of P, it seems like the data is quite noisy (hence the big differences between different levels of P that are not consistent across sigma^2 levels) but it seems that in general longer vectors (higher P's) take longer to cluster, not a suprising finding, but an important one non the less.
+
+
+
+Q2
+
+Load libraries and Data
+```{r message=FALSE, warning=FALSE, include=FALSE}
+library(dendextend)
+Sys.setlocale("LC_ALL","hebrew")
+isb_raw <- read.delim("cbs_demographics.txt")
+elections_raw <- read.csv("knesset23_res.csv")
+set.seed(100)
+```
+
+2.1
+The ISB data include a lot of Moatza Ezorit observations, which are not included in the elections data, since each one is represented by the Moatzot Mekomiot which form the Moatza Mekomit. Therfore, almost every sample from the isb end with an observation which is not include in the elections data. On the other hand, the elections data contatins much more observations then the isb, so sample from this data first is also almost impossible. Moreover, we couldn't intersect the observations names since they are not written in the same letters.
+Therfore, we pick the cities in advance, but we should note that we didn't have any bias intention in our choice.
+```{r}
+cities <- list(
+  elections = 
+    c(
+      "אבו גוש",
+"אופקים",
+"בת ים", 
+"בני ברק",
+"ירושלים", 
+"תל אביב  יפו",
+"ראשון לציון", 
+"באר שבע", 
+"אשדוד", 
+"אשקלון",
+"כפר סבא", 
+"רעננה",
+"נצרת", 
+"חדרה", 
+"טבריה", 
+"כרמיאל",
+"ערד", 
+"נתיבות", 
+"רמלה", 
+"רמת גן"
+    ),
+  
+  isb = 
+    c(
+      "ABU GHOSH",
+      "OFAQIM",
+      "BAT YAM",
+      "BENE BERAQ",
+      "JERUSALEM",
+      "TELAVIVYAFO",
+      "RISHONLEZIYYON",
+      "BEER SHEVA",
+      "ASHDOD",
+      "ASHQELON",
+      "KEFAR SAVA",
+      "RAANNANA",
+      "NAZARETH",
+      "HADERA",
+      "TIBERIAS",
+      "KARMIEL",
+      "ARAD",
+      "NETIVOT",
+      "RAMLA",
+      "RAMATGAN"
+    )
+)
+
+```
+
+
+```{r}
+elections <- subset(elections_raw, שם.ישוב %in% cities$elections)
+rownames(elections) <- elections$שם.ישוב
+elections <- subset(elections, select=-c(elections$שם.ישוב))
+
+isb <- subset(isb_raw, village %in% cities$isb)
+rownames(isb) <- isb$village
+isb <- subset(isb, select = -c(village))
+```
+
+2.2
+Firstly we should preprocess the elections data. We want to consider only the various votes to varous parties. Namely, we will not consider the number of Ba'alei Zechut Behira or actual voters, and other irrelevant metadata of the ballot (Mispar Va'ada). To do this, we will divide each Kalpei votes by its  total voters. Also, we will centerize the data for the hierarchical clustering.
+```{r}
+votes <- elections[, -c(1:6)]
+total <- elections$כשרים
+scaled_votes <- scale(votes/ total, scale = FALSE)
+```
+
+```{r}
+votes_hc <- hclust(dist(as.matrix(scaled_votes)), method="complete")
+```
+
+```{r}
+plot(votes_hc, main="Cities Dendogram according to Votes")
+```
+
+2.3
+We will preprocess the isb data. Basically, we found every colunm as an informative one in terms of socio-economic level. However, population size doesn't require statistical analysis to discover similarities (we could just sort cities according to their size), and doesn't "interesting" in terms of socio-economic level, though it's a subjective issue. Therfore, we decided to drop the population size column.
+Also we centerize the data.
+```{r}
+scaled_isb <- scale(isb[,-1], scale = FALSE)
+```
+
+```{r}
+isb_hc <- hclust(dist(as.matrix(scaled_isb)), method = "complete")
+```
+
+```{r}
+plot(isb_hc, main="Cities Dendogram according to Socio-Economic Data")
+```
+
+2.4
+Firstly, we should note the different height scales, which are a consequence of the fact we didn't have any normalizer to the isb data (in contrast to total voters in the elections data).
+Before, we have a look at the similarities and differences between the two Dendograms, let's have a look at the a visual comparison by a Tanglegram.
+To use this method (and also for the next Seifim),we need both trees to have matching labels, so first thing we will do is reconstruct the votes_hc but with labels in english.
+```{r}
+rownames(scaled_votes) <- cities$isb
+votes_hc <- hclust(dist(as.matrix(scaled_votes)), method="complete")
+```
+
+Now we must set the 2 graphs as dendograms and put them in a common list
+```{r}
+isb_dend <- as.dendrogram(isb_hc)
+votes_dend <- as.dendrogram(votes_hc)
+
+dend_list <- dendlist(votes_dend, isb_dend) 
+```
+
+We will look at a Tanglegram of the 2 trees, this plots the two dendrograms, side by side, with their labels connected by lines.
+```{r}
+dend_list %>%
+  untangle(method = "step1side") %>% # Find the best alignment layout
+  tanglegram() 
+```
+
+At a first glance the Tanglegram looks like a mess, indicating that the Hierarchies are very different, but a further look can show some similarities as well. 
+We can see that certain "areas" of the graph are mapped together in the Tanglegram, meaning that those cities are clustered together quite early in the tree. For example, we can see Ashdod, Bat-Yam, Arad & Ashquelon are all clustered together quite early on both trees, same goes for Nazerath & Abu gosh. 
+However we can also see some cities that are clustered together in very different stages of the trees, Hadera & Ramla are a good example of this. 
+If we think about these similarities and differences we think that they represent some aspects of voting that can be explained in demographics and aspects that can't. For one we can say the most wealthy cities tend to vote center-left. However, there are variety of parties that less wealthy citeis tend to vote for. For example, in a socio-economic point of view Nazereth and Netivot are colsed ones, but in cotrast in an electoral point of view they are relatively far, while Nazereth and Abu Gosh still close as they tend to vote together.
+
+2.5
+Now let's see how close the dendograms are to each other by looking at the Baker's Gamma similarity score:
+```{r}
+sim_score <- cor_bakers_gamma(votes_dend, isb_dend)
+sim_score
+```
+
+We chose to use the Baker's Gamma measurement between the 2 tree's since this score only looks at the similarity of the hierarchy of the clusters, without looking at the hight of each node. We found this convenient since our 2 trees have different scales. 
+We can see the the trees recieved a negative score very close to 0, meaning that the two trees are not statistically similar.
+
+2.6
+we "shuffle" the rownames of the scaled_votes DF, so the names are randomly assigned to data. Than we will make a new dendogram on each permutation and calculate the Baker's Gamma score between the new dendogram and the untouches ISB dendogram.
+
+```{r}
+mix_and_compare <- function(df, const_dend){
+  perm <- sample(rownames(df), 20, replace = F)
+  rownames(df) <- perm
+  votes_dend <- as.dendrogram(hclust(dist(as.matrix(df)), method="complete"))
+  return(cor_bakers_gamma(votes_dend, const_dend, use_labels_not_values = F))
+}
+```
+
+```{r}
+res <- c()
+for (i in 1:1000){
+  res <- c(res, mix_and_compare(scaled_votes, isb_dend)) 
+}
+```
+
+The Null Hypothesys is that the Baker's Gamma equals to zero. We will plot the background distribution (our simmulation result) and calculate the p-value of our observed Baker's Gamma (the one from 2.5 above)
+```{r}
+den_plot <- ggplot() + geom_density(aes(x = res)) +
+  xlim(-1,1) +
+  labs(x = " Baker's Gamma", y = " Density", title = "Background Distribution of Baker's Gamma for 2 the two Dendograms")
+den_plot
+```
+
+```{r}
+p_val <- (sum(res > abs(sim_score)) + sum(res < -abs(sim_score))) / 1000
+p_val
+```
+
+The p-value is pretty high, namely we almost never reject the null hypothesys. The meanig of our result is that we can't say the social data dendogram and the elections data dendogram are correlated, in terms of Baker's Gamma Measurement. This finding support in the findings we indicate in 2.4 above.

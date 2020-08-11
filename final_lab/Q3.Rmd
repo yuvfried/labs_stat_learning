@@ -1,0 +1,217 @@
+---
+title: "Q3"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r message=FALSE}
+library(dplyr)
+library(xgboost)
+library(ggplot2)
+```
+
+```{r}
+raw_data <- read.csv("pisa_israel_2018_fortargil.csv")
+```
+
+Firstly, we'll preprocess the data similarly to what we've done in Q2
+```{r}
+impute_mean <- function(data, cols_to_impute){
+  vals_to_impute <- colMeans(data[cols_to_impute],na.rm=TRUE)
+  for (col in cols_to_impute){
+    data[col][is.na(data[col])] <- vals_to_impute[col]
+  }
+  return(data)
+}
+
+convert_to_dummies <- function(data, cat_name){
+  one_hot <- model.matrix(~data[[cat_name]])[,-1]
+  n_minus_one <- length(colnames(one_hot))
+  colnames(one_hot) <- paste(rep(cat_name,n_minus_one),1:n_minus_one,sep="")
+  data <- data[ , -which(names(data) %in% c(cat_name))]
+  data <- cbind(one_hot, data)
+  return(data)
+}
+
+zero_one_scaling <- function(vec){
+  mini <- min(vec)
+  maxi <- max(vec)
+  return(sapply(vec, function(x) (x-mini)/(maxi-mini)))
+}
+```
+
+```{r}
+data <- data.frame(raw_data)
+
+cols_to_impute <- names(which(colSums(is.na(data))>0))
+data <- impute_mean(data,cols_to_impute)
+data$LANGN <- as.character(data$LANGN)
+data <- convert_to_dummies(data,"LANGN")
+data <- convert_to_dummies(data,"System")
+
+PVREAD.params <- list(min=min(data$PVREAD), max=(max(data$PVREAD)))
+# this time we'll not scale target variable
+data[,13:length(colnames(data))] <- apply(data[,13:length(colnames(data))],2,zero_one_scaling)
+```
+
+We'll train the data using k-fold Cross-Validation. At the final stage, I'll submit a model which will be trained on the whole dataset.
+```{r}
+X <- as.matrix(select(data, -PVREAD))
+```
+
+I'll try to build a model based on Gradient Boosting Trees algorithm. For implementation purposes, I would be helped by this [link](http://uc-r.github.io/gbm_regression).
+At first, we'll examine the profrmance of arbitrary hyperparameters. Note: 'eta' here is the 'lambda' (shrinkage) hyperparameter we saw in class, 'max_depth' is d (tree complexity), and 'nrounds' is B (nubmer of trees).
+```{r}
+params <- list(
+    eta = .1,
+    max_depth = 5,
+    objective = 'reg:squarederror'
+    )
+```
+
+```{r}
+start <- Sys.time()
+
+set.seed(111)
+ex1 <- xgb.cv(
+  params = params,
+  data = X,
+  label = data$PVREAD,
+  nrounds = 500,
+  nfold = 5,
+  verbose = 0
+)
+
+end <- Sys.time()
+print(end-start)
+```
+
+Plot results in order to see the improvment of the model according to the development of the trees (iteration over the hyperparameter B).
+```{r, fig.height=3,fig.width=5}
+ggplot(ex1$evaluation_log) +
+  geom_line(aes(iter,train_rmse_mean,colour="1"), show.legend = T) +
+  geom_line(aes(iter,test_rmse_mean,colour="2"), show.legend = T) + 
+  scale_color_discrete(labels = c("train", "test")) +
+  labs(title="RMSE throuh Trees", color=element_blank(), x="iteration", y="RMSE")
+```
+
+Note that we can take Q2 knn best model as a baseline to the model here. This model had approximately 0.13 RMSE on 25% data points which have served as a test set. As the scale of PVREAD here is different than in Q2, we'' examine the relation to the std-dev:
+```{r}
+0.13/sd(zero_one_scaling(data$PVREAD))
+```
+
+The model here achieved RMSE:
+```{r}
+min(ex1$evaluation_log$test_rmse_mean)
+```
+
+And the relation to target's std-dev is:
+```{r}
+min(ex1$evaluation_log$test_rmse_mean)/sd(data$PVREAD)
+```
+
+That is a bit of improvement, even though we havn't tuned hyperparameters already. Also, we can notice that in the latest iterations the test error slightly increase. This could be caused by too large learning rate. To examine this hypothesis, let's reduce this hyperparameter.
+
+```{r}
+params <- list(
+    eta = .01,
+    max_depth = 5,
+    objective = 'reg:squarederror'
+    )
+
+start <- Sys.time()
+
+set.seed(111)
+ex2 <- xgb.cv(
+  params = params,
+  data = X,
+  label = data$PVREAD,
+  nrounds = 500,
+  nfold = 5,
+  verbose = 0
+)
+
+end <- Sys.time()
+print(end-start)
+```
+
+```{r, fig.height=3,fig.width=5}
+ggplot(ex2$evaluation_log) +
+  geom_line(aes(iter,train_rmse_mean,colour="1"), show.legend = T) +
+  geom_line(aes(iter,test_rmse_mean,colour="2"), show.legend = T) + 
+  scale_color_discrete(labels = c("train", "test")) +
+  labs(title="RMSE throuh Trees", color=element_blank(), x="iteration", y="RMSE")
+```
+
+Now, we see that the RMSE keep decreasing also in the test set. If we would want to increase the number of iterations, it would increase the running time, especially when we'll get to tune the hyperparameters. Yet, there are some tuning setups, in which large value of B is redundant. For example, in the first setup above the RMSE for test almost doesn't imporve after ~100 iterations. Therfore, we can apply "early stopping" - telling the model to stop develop the trees if there is no improve of the RMSE in the last k iterations. This feature can save us time when we'll get to examine a lot of combinations of hyperparameters, and on the other hand keep B value high.
+```{r}
+hyper_grid <- expand.grid(
+  eta = c(0.005, .01, .05, .1),
+  d = c(3, 5, 7),
+  optimal_trees = 0, # a place to dump results               
+  min_train_rmse = 0, # a place to dump results
+  min_test_rmse = 0 # a place to dump results
+)
+
+opt_xgb <- function(hypers){
+  params <- list(
+    eta=hypers[["eta"]],
+    d=hypers[["d"]]
+    )
+  set.seed(111)
+  res <- xgb.cv(
+    params = params,
+    data = X,
+    label = data$PVREAD,
+    nrounds = 2000,
+    nfold = 5,
+    verbose = 0,
+    early_stopping_rounds = 50
+  )
+  
+  return(res)
+}
+
+start <- Sys.time()
+tune.res <- apply(hyper_grid[,c("eta","d")],1,opt_xgb)
+end <- Sys.time()
+print(end-start)
+
+for (i in 1:length(tune.res)){
+  hyper_grid$optimal_trees[i] <- tune.res[[i]]$best_iteration
+  hyper_grid$min_train_rmse[i] <- min(tune.res[[i]]$evaluation_log$train_rmse_mean)
+  hyper_grid$min_test_rmse[i] <- min(tune.res[[i]]$evaluation_log$test_rmse_mean)
+}
+```
+ 
+```{r}
+best_hypers <- hyper_grid[which.min(hyper_grid$min_test_rmse),]
+best_hypers
+```
+
+We've got a little improvement (-10^-3) from our first experiment
+```{r}
+best_hypers$min_test_rmse/sd(data$PVREAD)
+```
+
+Now we can train the final model with the best hyperparameters.
+```{r}
+params <- list(
+  eta = best_hypers$eta,
+  max_depth = best_hypers$d,
+  objective = 'reg:squarederror'
+)
+
+start <- Sys.time()
+model <- xgboost(
+  params = params,
+  data = X,
+  label = data$PVREAD,
+  nrounds = best_hypers$optimal_trees,
+  verbose = 0
+)
+
+end <- Sys.time()
+print(end-start)
+```
